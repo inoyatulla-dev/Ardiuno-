@@ -38,7 +38,7 @@ CRGB leds[NUM_LEDS];
 #define AUSTRALIA_START 31
 #define AUSTRALIA_END 35
 #define ANTARCTICA_START 36
-#define ANTARCTICA_END 40
+#define ANTARCTICA_END 39 // Adjusted to NUM_LEDS - 1
 
 // Pins
 #define MIC_PIN 7
@@ -50,7 +50,7 @@ Mode currentMode = FULL_LED;
 int currentContinent = 0; // 0=Asia, 1=Africa, 2=Europe, 3=North America, 4=South America, 5=Australia, 6=Antarctica
 int currentEffect = 0; // 0=Auto, 1-23 for specific effects
 int lastEffect = 1; // Store last non-auto effect
-bool powerState = false;
+bool powerState = true; // Start powered on
 uint8_t effectSpeed = 50; // 0-100 scale
 unsigned long lastAnimationUpdate = 0;
 const int ANIMATION_INTERVAL = 20; // Reduced for faster animations
@@ -93,24 +93,18 @@ void setup() {
   mySwitch.enableReceive(0); // D2 pin, interrupt 0
   Serial.println("433 MHz RF signal receiver ready...");
   
-  // Load saved state
-  currentMode = (Mode)EEPROM.read(0);
-  currentContinent = EEPROM.read(1);
-  currentEffect = EEPROM.read(2);
-  lastEffect = EEPROM.read(3);
-  powerState = EEPROM.read(4);
-  
-  if (!powerState) {
-    FastLED.clear();
-    FastLED.show();
+  // Load last effect from EEPROM
+  currentEffect = EEPROM.read(0);
+  if (currentEffect > 23) { // Validate effect (0-23)
+    currentEffect = 0; // Default to Auto mode if invalid
   }
+  lastEffect = (currentEffect == 0) ? 1 : currentEffect; // Set lastEffect
 }
 
 void loop() {
   // Prioritize RF and clap detection
-  handleClaps();
   handleRF();
- 
+  handleClaps();
   
   // Update animations only if powered on and not transitioning
   if (powerState && !isTransitioning) {
@@ -119,9 +113,7 @@ void loop() {
 }
 
 void handleRF() {
-  Serial.println("Signal rf.");
   if (mySwitch.available()) {
-    Serial.println("Signal available ."); 
     long code = mySwitch.getReceivedValue();
     mySwitch.resetAvailable();
     
@@ -250,13 +242,35 @@ void togglePower() {
     }
   } else {
     // Power on: Flash animation
-    for (int i = 0; i < 5; i++) {
-      setLeds(CHSV(random8(), 255, 255));
-      FastLED.show();
-      delay(50);
-      setLeds(CRGB::Black);
-      FastLED.show();
-      delay(50);
+   // for (int i = 0; i < 5; i++) {
+    //  setLeds(CHSV(random8(), 255, 255));
+    //  FastLED.show();
+   //   delay(50);
+     // setLeds(CRGB::Black);
+     // FastLED.show();
+     // delay(50);
+     uint8_t trailLength = 10;   // Quyruq uzunligi
+    uint8_t starHue = 160;
+     for (int head = 0; head < NUM_LEDS + trailLength; head++) {
+    // Barcha LEDlarni biroz qoraytirish (iz qoldirish)
+    
+    fadeToBlackBy(leds, NUM_LEDS, 50);
+
+    // Shooting Star boshi
+    if (head < NUM_LEDS) {
+      leds[head] = CHSV(starHue, 255, 255);
+    }
+
+    // Quyruq (iz)
+    for (int i = 1; i <= trailLength; i++) {
+      int pos = head - i;
+      if (pos >= 0 && pos < NUM_LEDS) {
+        leds[pos] += CHSV(starHue, 255, 255 - (255 / trailLength) * i);
+      }
+    }
+
+    FastLED.show();
+    delay(30);
     }
   }
   saveState();
@@ -307,11 +321,7 @@ void setColorEffect(long code) {
 }
 
 void saveState() {
-  EEPROM.update(0, currentMode);
-  EEPROM.update(1, currentContinent);
-  EEPROM.update(2, currentEffect);
-  EEPROM.update(3, lastEffect);
-  EEPROM.update(4, powerState);
+  EEPROM.update(0, currentEffect); // Save only currentEffect
 }
 
 void updateAnimation() {
@@ -326,6 +336,7 @@ void updateAnimation() {
     autoTimer = millis();
     Serial.print("Auto mode switched to effect: ");
     Serial.println(currentEffect);
+    saveState(); // Save new effect in Auto mode
   }
   
   FastLED.clear();
