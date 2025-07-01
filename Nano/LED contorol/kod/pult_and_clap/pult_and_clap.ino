@@ -1,13 +1,11 @@
-#include "FastLED.h"
-#include <EEPROM.h>
+#include <FastLED.h>
 #include <RCSwitch.h>
-#include <SoundSensor.h> // Assuming a library for sound/clap detection
+#include <EEPROM.h>
 
+// LED Configuration
 #define NUM_LEDS 280
+#define DATA_PIN 6
 CRGB leds[NUM_LEDS];
-#define LED_PIN 6
-#define BUTTON_PIN 2
-#define SOUND_PIN A0 // Microphone module pin
 
 // RF Remote Codes
 #define POWER 429057
@@ -42,799 +40,411 @@ CRGB leds[NUM_LEDS];
 #define ANTARCTICA_START 261
 #define ANTARCTICA_END 279
 
-RCSwitch mySwitch = RCSwitch();
-SoundSensor soundSensor(SOUND_PIN); // Initialize sound sensor
+// Pins
+#define MIC_PIN 7
+#define RF_PIN 2
 
-// Mode and state variables
+// State Management
 enum Mode { FULL_LED, CONTINENT };
 Mode currentMode = FULL_LED;
-byte selectedEffect = 0;
-byte currentContinent = 0;
-int effectSpeed = 50; // Default speed
-bool powerState = true; // LEDs on by default
+int currentContinent = 0; // 0=Asia, 1=Africa, 2=Europe, 3=North America, 4=South America, 5=Australia, 6=Antarctica
+int currentEffect = 0; // 0=Auto, 1-23 for specific effects
+int lastEffect = 1; // Store last non-auto effect
+bool powerState = false;
+uint8_t effectSpeed = 50; // 0-100 scale
+unsigned long lastUpdate = 0;
+unsigned long autoTimer = 0;
+bool isTransitioning = false;
+
+// Clap Detection
 unsigned long lastClapTime = 0;
 int clapCount = 0;
-const unsigned long CLAP_WINDOW = 3000; // 3 seconds for clap counting
+unsigned long clapWindowStart = 0;
+const unsigned long CLAP_WINDOW = 3000; // 3 seconds
 
-struct State {
-  Mode mode;
-  byte effect;
-  byte continent;
-  bool power;
-  int speed;
+// Animation States
+uint8_t hue = 0;
+uint8_t pos = 0;
+unsigned long lastAnimationUpdate = 0;
+const int ANIMATION_INTERVAL = 50; // Base animation speed
+
+RCSwitch mySwitch = RCSwitch();
+
+struct Continent {
+  int start;
+  int end;
+};
+
+Continent continents[] = {
+  {ASIA_START, ASIA_END},
+  {AFRICA_START, AFRICA_END},
+  {EUROPE_START, EUROPE_END},
+  {NORTH_AMERICA_START, NORTH_AMERICA_END},
+  {SOUTH_AMERICA_START, SOUTH_AMERICA_END},
+  {AUSTRALIA_START, AUSTRALIA_END},
+  {ANTARCTICA_START, ANTARCTICA_END}
 };
 
 void setup() {
-  FastLED.addLeds<WS2811, LED_PIN, GRB>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonInterrupt, CHANGE);
-  mySwitch.enableReceive(0); // RF receiver on interrupt 0 (D2)
+  FastLED.addLeds<WS2811, DATA_PIN, RGB>(leds, NUM_LEDS);
+  FastLED.setBrightness(255);
+  
+  pinMode(MIC_PIN, INPUT);
   Serial.begin(9600);
-  soundSensor.begin(); // Initialize sound sensor
-  loadState();
+  mySwitch.enableReceive(0); // D2 pin
+  
+  // Load saved state
+  currentMode = (Mode)EEPROM.read(0);
+  currentContinent = EEPROM.read(1);
+  currentEffect = EEPROM.read(2);
+  lastEffect = EEPROM.read(3);
+  powerState = EEPROM.read(4);
+  
+  if (!powerState) {
+    FastLED.clear();
+    FastLED.show();
+  }
 }
 
 void loop() {
-  // Handle RF remote
-  if (mySwitch.available()) {
-    handleRFCommand(mySwitch.getReceivedValue());
-    mySwitch.resetAvailable();
-  }
-
-  // Handle clap detection
-  if (soundSensor.detectClap()) {
-    unsigned long currentTime = millis();
-    if (currentTime - lastClapTime < CLAP_WINDOW) {
-      clapCount++;
-    } else {
-      clapCount = 1; // Reset count if outside window
-    }
-    lastClapTime = currentTime;
-
-    // Process claps after window or max claps
-    if (clapCount >= 3 || (currentTime - lastClapTime >= CLAP_WINDOW && clapCount > 0)) {
-      handleClapCommands(clapCount);
-      clapCount = 0;
-    }
-  }
-
-  if (!powerState) {
-    setAll(0, 0, 0);
-    return;
-  }
-
-  // Execute effect based on mode
-  if (currentMode == FULL_LED) {
-    runEffect(selectedEffect, 0, NUM_LEDS - 1);
-  } else {
-    runContinentEffect();
+  handleRF();
+  handleClaps();
+  if (powerState && !isTransitioning) {
+    updateAnimation();
   }
 }
 
-void buttonInterrupt() {
-  if (digitalRead(BUTTON_PIN) == HIGH) {
-    selectedEffect = (selectedEffect + 1) % 24;
+void handleRF() {
+  if (mySwitch.available()) {
+    long code = mySwitch.getReceivedValue();
+    mySwitch.resetAvailable();
+    
+    if (code == 0) return;
+    
+    switch (code) {
+      case POWER:
+        togglePower();
+        break;
+      case MODE_PLUS:
+        changeMode(1);
+        break;
+      case MODE_MINUS:
+        changeMode(-1);
+        break;
+      case SPEED_PLUS:
+        effectSpeed = min(100, effectSpeed + 10);
+        break;
+      case SPEED_MINUS:
+        effectSpeed = max(0, effectSpeed - 10);
+        break;
+      case CONTINENT_PLUS:
+        if (currentMode != CONTINENT) {
+          currentMode = CONTINENT;
+          currentContinent = 0;
+        } else {
+          currentContinent = (currentContinent + 1) % 7;
+        }
+        startTransition();
+        break;
+      case CONTINENT_MINUS:
+        if (currentMode != CONTINENT) {
+          currentMode = CONTINENT;
+          currentContinent = 0;
+        } else {
+          currentContinent = (currentContinent - 1 + 7) % 7;
+        }
+        startTransition();
+        break;
+      case AUTO:
+        currentMode = FULL_LED;
+        currentEffect = 0;
+        startTransition();
+        break;
+      case WHITE: case RED: case GREEN: case BLUE: case YELLOW: case LIGHT_BLUE: case PINK:
+        setColorEffect(code);
+        break;
+    }
     saveState();
   }
 }
 
-void handleRFCommand(long code) {
+void handleClaps() {
+  if (digitalRead(MIC_PIN) == HIGH && millis() - lastClapTime > 200) {
+    if (clapWindowStart == 0) {
+      clapWindowStart = millis();
+    }
+    clapCount++;
+    lastClapTime = millis();
+  }
+  
+  if (clapWindowStart > 0 && millis() - clapWindowStart > CLAP_WINDOW) {
+    processClaps();
+    clapCount = 0;
+    clapWindowStart = 0;
+  }
+}
+
+void processClaps() {
+  if (clapCount == 1) {
+    togglePower();
+  } else if (clapCount == 2) {
+    if (currentMode == CONTINENT) {
+      currentContinent = (currentContinent + 1) % 7;
+    } else {
+      changeMode(1);
+    }
+    startTransition();
+  } else if (clapCount == 3) {
+    if (currentMode == CONTINENT) {
+      currentContinent = (currentContinent - 1 + 7) % 7;
+    } else {
+      changeMode(-1);
+    }
+    startTransition();
+  }
+  saveState();
+}
+
+void togglePower() {
+  powerState = !powerState;
+  if (!powerState) {
+    FastLED.clear();
+    FastLED.show();
+  } else {
+    startTransition();
+  }
+}
+
+void changeMode(int direction) {
+  currentMode = FULL_LED;
+  if (currentEffect == 0) {
+    currentEffect = lastEffect;
+  }
+  currentEffect = (currentEffect + direction + 24) % 24;
+  if (currentEffect == 0) {
+    lastEffect = (lastEffect == 0) ? 1 : lastEffect;
+  } else {
+    lastEffect = currentEffect;
+  }
+  startTransition();
+}
+
+void startTransition() {
+  isTransitioning = true;
+  unsigned long startTime = millis();
+  for (int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = CRGB::Black;
+  }
+  FastLED.show();
+  
+  // Flash transition
+  for (int i = 0; i < 5; i++) {
+    setLeds(CHSV(random8(), 255, 255));
+    FastLED.show();
+    delay(100);
+    setLeds(CRGB::Black);
+    FastLED.show();
+    delay(100);
+  }
+  isTransitioning = false;
+}
+
+void setColorEffect(long code) {
+  currentMode = FULL_LED;
   switch (code) {
-    case POWER:
-      powerState = !powerState;
-      if (!powerState) setAll(0, 0, 0);
-      break;
-    case MODE_PLUS:
-      selectedEffect = (selectedEffect + 1) % 24;
-      break;
-    case MODE_MINUS:
-      selectedEffect = (selectedEffect == 0) ? 23 : selectedEffect - 1;
-      break;
-    case SPEED_PLUS:
-      effectSpeed = max(10, effectSpeed - 10);
-      break;
-    case SPEED_MINUS:
-      effectSpeed = min(200, effectSpeed + 10);
-      break;
-    case CONTINENT_PLUS:
-      currentMode = CONTINENT;
-      currentContinent = (currentContinent + 1) % 7;
-      break;
-    case CONTINENT_MINUS:
-      currentMode = CONTINENT;
-      currentContinent = (currentContinent == 0) ? 6 : currentContinent - 1;
-      break;
-    case AUTO:
-      currentMode = FULL_LED;
-      selectedEffect = 0;
-      break;
-    case WHITE:
-      selectedEffect = 1;
-      break;
-    case RED:
-      selectedEffect = 2;
-      break;
-    case GREEN:
-      selectedEffect = 3;
-      break;
-    case YELLOW:
-      selectedEffect = 4;
-      break;
-    case LIGHT_BLUE:
-      selectedEffect = 5;
-      break;
-    case PINK:
-      selectedEffect = 6;
-      break;
+    case WHITE: currentEffect = 1; break;
+    case RED: currentEffect = 2; break;
+    case GREEN: currentEffect = 3; break;
+    case YELLOW: currentEffect = 4; break;
+    case LIGHT_BLUE: currentEffect = 5; break;
+    case PINK: currentEffect = 6; break;
   }
-  saveState();
-}
-
-void handleClapCommands(int count) {
-  switch (count) {
-    case 1:
-      powerState = !powerState;
-      if (!powerState) setAll(0, 0, 0);
-      break;
-    case 2:
-      currentMode = CONTINENT;
-      currentContinent = (currentContinent + 1) % 7;
-      break;
-    case 3:
-      currentMode = CONTINENT;
-      currentContinent = (currentContinent == 0) ? 6 : currentContinent - 1;
-      break;
-  }
-  saveState();
-}
-
-void loadState() {
-  State state;
-  EEPROM.get(0, state);
-  if (state.mode <= CONTINENT && state.effect < 24 && state.continent < 7) {
-    currentMode = state.mode;
-    selectedEffect = state.effect;
-    currentContinent = state.continent;
-    powerState = state.power;
-    effectSpeed = state.speed;
-  }
+  lastEffect = currentEffect;
+  startTransition();
 }
 
 void saveState() {
-  State state = {currentMode, selectedEffect, currentContinent, powerState, effectSpeed};
-  EEPROM.put(0, state);
+  EEPROM.update(0, currentMode);
+  EEPROM.update(1, currentContinent);
+  EEPROM.update(2, currentEffect);
+  EEPROM.update(3, lastEffect);
+  EEPROM.update(4, powerState);
 }
 
-void runContinentEffect() {
-  int start, end;
-  getContinentRange(currentContinent, start, end);
-  // Turn off all LEDs outside the current continent
-  for (int i = 0; i < NUM_LEDS; i++) {
-    if (i < start || i > end) {
-      setPixel(i, 0, 0, 0);
-    }
+void updateAnimation() {
+  if (millis() - lastAnimationUpdate < ANIMATION_INTERVAL * (100 - effectSpeed) / 100) return;
+  lastAnimationUpdate = millis();
+  
+  if (currentEffect == 0 && millis() - autoTimer > 10000) {
+    currentEffect = (lastEffect % 23) + 1;
+    lastEffect = currentEffect;
+    autoTimer = millis();
   }
-  runEffect(selectedEffect, start, end);
-}
-
-void getContinentRange(byte continent, int &start, int &end) {
-  switch (continent) {
-    case 0: // Asia
-      start = ASIA_START;
-      end = ASIA_END;
+  
+  FastLED.clear();
+  
+  switch (currentEffect) {
+    case 0: // Auto (handled above)
       break;
-    case 1: // Africa
-      start = AFRICA_START;
-      end = AFRICA_END;
-      break;
-    case 2: // Europe
-      start = EUROPE_START;
-      end = EUROPE_END;
-      break;
-    case 3: // North America
-      start = NORTH_AMERICA_START;
-      end = NORTH_AMERICA_END;
-      break;
-    case 4: // South America
-      start = SOUTH_AMERICA_START;
-      end = SOUTH_AMERICA_END;
-      break;
-    case 5: // Australia
-      start = AUSTRALIA_START;
-      end = AUSTRALIA_END;
-      break;
-    case 6: // Antarctica
-      start = ANTARCTICA_START;
-      end = ANTARCTICA_END;
-      break;
+    case 1: setLeds(CRGB::White); break;
+    case 2: setLeds(CRGB::Red); break;
+    case 3: setLeds(CRGB::Green); break;
+    case 4: setLeds(CRGB::Yellow); break;
+    case 5: setLeds(CRGB(135, 206, 250)); break; // LightBlue
+    case 6: setLeds(CRGB::Pink); break;
+    case 7: oceanEffect(); break;
+    case 8: fireEffect(); break;
+    case 9: colorWipe(); break;
+    case 10: rainbow(); break;
+    case 11: theaterChase(); break;
+    case 12: runningLights(); break;
+    case 13: fadeInOut(); break;
+    case 14: twinkle(); break;
+    case 15: fireEffect(); break;
+    case 16: pulse(); break;
+    case 17: strobe(); break;
+    case 18: colorCycle(); break;
+    case 19: sparkle(); break;
+    case 20: breathe(); break;
+    case 21: meteorRain(); break;
+    case 22: cylon(); break;
+    case 23: confetti(); break;
   }
-}
-
-void runEffect(byte effect, int start, int end) {
-  static unsigned long lastAutoSwitch = 0;
-  if (effect == 0) { // Auto mode
-    if (millis() - lastAutoSwitch > 10000) {
-      selectedEffect = (selectedEffect % 23) + 1; // Cycle through effects 1-23
-      lastAutoSwitch = millis();
-      saveState();
-    }
-  }
-
-  switch (effect) {
-    case 0: // Auto handled above
-      break;
-    case 1: // White
-      for (int i = start; i <= end; i++) setPixel(i, 255, 255, 255);
-      showStrip();
-      break;
-    case 2: // Red
-      for (int i = start; i <= end; i++) setPixel(i, 255, 0, 0);
-      showStrip();
-      break;
-    case 3: // Green
-      for (int i = start; i <= end; i++) setPixel(i, 0, 255, 0);
-      showStrip();
-      break;
-    case 4: // Yellow
-      for (int i = start; i <= end; i++) setPixel(i, 255, 255, 0);
-      showStrip();
-      break;
-    case 5: // Light Blue
-      for (int i = start; i <= end; i++) setPixel(i, 0, 191, 255);
-      showStrip();
-      break;
-    case 6: // Pink
-      for (int i = start; i <= end; i++) setPixel(i, 255, 20, 147);
-      showStrip();
-      break;
-    case 7: // Ocean Waves
-      OceanWaves(start, end, effectSpeed);
-      break;
-    case 8: // Fire (already implemented)
-      Fire(55, 120, effectSpeed, start, end);
-      break;
-    case 9: // Color Wipe (already implemented)
-      colorWipe(0, 255, 0, effectSpeed, start, end);
-      colorWipe(0, 0, 0, effectSpeed, start, end);
-      break;
-    case 10: // Rainbow (already implemented)
-      rainbowCycle(effectSpeed, start, end);
-      break;
-    case 11: // Theater Chase (already implemented)
-      theaterChase(255, 0, 0, effectSpeed, start, end);
-      break;
-    case 12: // Running Lights (already implemented)
-      RunningLights(255, 0, 0, effectSpeed, start, end);
-      break;
-    case 13: // Fade In/Out (already implemented)
-      FadeInOut(255, 0, 0, start, end);
-      break;
-    case 14: // Twinkle (already implemented)
-      Twinkle(255, 0, 0, 10, effectSpeed, false, start, end);
-      break;
-    case 15: // Fire (already implemented, repeated for consistency)
-      Fire(55, 120, effectSpeed, start, end);
-      break;
-    case 16: // Pulse
-      Pulse(255, 0, 0, effectSpeed, start, end);
-      break;
-    case 17: // Strobe (already implemented)
-      Strobe(255, 255, 255, 10, effectSpeed, 1000, start, end);
-      break;
-    case 18: // Color Cycle
-      ColorCycle(effectSpeed, start, end);
-      break;
-    case 19: // Sparkle (already implemented)
-      Sparkle(255, 255, 255, effectSpeed, start, end);
-      break;
-    case 20: // Breathe
-      Breathe(255, 0, 0, effectSpeed, start, end);
-      break;
-    case 21: // Meteor Rain (already implemented)
-      meteorRain(255, 255, 255, 10, 64, true, effectSpeed, start, end);
-      break;
-    case 22: // Cylon (already implemented)
-      CylonBounce(255, 0, 0, 4, effectSpeed, 50, start, end);
-      break;
-    case 23: // Confetti
-      Confetti(effectSpeed, start, end);
-      break;
-  }
-}
-
-// Modified FastLED functions to support start/end ranges
-void setPixel(int Pixel, byte red, byte green, byte blue) {
-  leds[Pixel].r = red;
-  leds[Pixel].g = green;
-  leds[Pixel].b = blue;
-}
-
-void setAll(byte red, byte green, byte blue, int start, int end) {
-  for (int i = start; i <= end; i++) {
-    setPixel(i, red, green, blue);
-  }
-  showStrip();
-}
-
-void showStrip() {
   FastLED.show();
 }
 
-void RGBLoop(int start, int end) {
-  for (int j = 0; j < 3; j++) {
-    for (int k = 0; k < 256; k++) {
-      switch (j) {
-        case 0: setAll(k, 0, 0, start, end); break;
-        case 1: setAll(0, k, 0, start, end); break;
-        case 2: setAll(0, 0, k, start, end); break;
-      }
-      delay(3);
+void setLeds(CRGB color) {
+  if (currentMode == FULL_LED) {
+    for (int i = 0; i < NUM_LEDS; i++) {
+      leds[i] = color;
     }
-    for (int k = 255; k >= 0; k--) {
-      switch (j) {
-        case 0: setAll(k, 0, 0, start, end); break;
-        case 1: setAll(0, k, 0, start, end); break;
-        case 2: setAll(0, 0, k, start, end); break;
-      }
-      delay(3);
-    }
-  }
-}
-
-void FadeInOut(byte red, byte green, byte blue, int start, int end) {
-  float r, g, b;
-  for (int k = 0; k < 256; k++) {
-    r = (k / 256.0) * red;
-    g = (k / 256.0) * green;
-    b = (k / 256.0) * blue;
-    setAll(r, g, b, start, end);
-  }
-  for (int k = 255; k >= 0; k -= 2) {
-    r = (k / 256.0) * red;
-    g = (k / 256.0) * green;
-    b = (k / 256.0) * blue;
-    setAll(r, g, b, start, end);
-  }
-}
-
-void Strobe(byte red, byte green, byte blue, int StrobeCount, int FlashDelay, int EndPause, int start, int end) {
-  for (int j = 0; j < StrobeCount; j++) {
-    setAll(red, green, blue, start, end);
-    delay(FlashDelay);
-    setAll(0, 0, 0, start, end);
-    delay(FlashDelay);
-  }
-  delay(EndPause);
-}
-
-void HalloweenEyes(byte red, byte green, byte blue, int EyeWidth, int EyeSpace, boolean Fade, int Steps, int FadeDelay, int EndPause, int start, int end) {
-  randomSeed(analogRead(0));
-  int range = end - start + 1;
-  int StartPoint = random(start, end - (2 * EyeWidth) - EyeSpace + 1);
-  int Start2ndEye = StartPoint + EyeWidth + EyeSpace;
-
-  for (int i = 0; i < EyeWidth; i++) {
-    if (StartPoint + i <= end) setPixel(StartPoint + i, red, green, blue);
-    if (Start2ndEye + i <= end) setPixel(Start2ndEye + i, red, green, blue);
-  }
-  showStrip();
-
-  if (Fade) {
-    float r, g, b;
-    for (int j = Steps; j >= 0; j--) {
-      r = j * (red / Steps);
-      g = j * (green / Steps);
-      b = j * (blue / Steps);
-      for (int i = 0; i < EyeWidth; i++) {
-        if (StartPoint + i <= end) setPixel(StartPoint + i, r, g, b);
-        if (Start2ndEye + i <= end) setPixel(Start2ndEye + i, r, g, b);
-      }
-      showStrip();
-      delay(FadeDelay);
-    }
-  }
-  setAll(0, 0, 0, start, end);
-  delay(EndPause);
-}
-
-void CylonBounce(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, int ReturnDelay, int start, int end) {
-  for (int i = start; i <= end - EyeSize - 2; i++) {
-    setAll(0, 0, 0, start, end);
-    setPixel(i, red / 10, green / 10, blue / 10);
-    for (int j = 1; j <= EyeSize; j++) {
-      setPixel(i + j, red, green, blue);
-    }
-    setPixel(i + EyeSize + 1, red / 10, green / 10, blue / 10);
-    showStrip();
-    delay(SpeedDelay);
-  }
-  delay(ReturnDelay);
-  for (int i = end - EyeSize - 2; i >= start; i--) {
-    setAll(0, 0, 0, start, end);
-    setPixel(i, red / 10, green / 10, blue / 10);
-    for (int j = 1; j <= EyeSize; j++) {
-      setPixel(i + j, red, green, blue);
-    }
-    setPixel(i + EyeSize + 1, red / 10, green / 10, blue / 10);
-    showStrip();
-    delay(SpeedDelay);
-  }
-  delay(ReturnDelay);
-}
-
-void NewKITT(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, int ReturnDelay, int start, int end) {
-  RightToLeft(red, green, blue, EyeSize, SpeedDelay, ReturnDelay, start, end);
-  LeftToRight(red, green, blue, EyeSize, SpeedDelay, ReturnDelay, start, end);
-  OutsideToCenter(red, green, blue, EyeSize, SpeedDelay, ReturnDelay, start, end);
-  CenterToOutside(red, green, blue, EyeSize, SpeedDelay, ReturnDelay, start, end);
-  LeftToRight(red, green, blue, EyeSize, SpeedDelay, ReturnDelay, start, end);
-  RightToLeft(red, green, blue, EyeSize, SpeedDelay, ReturnDelay, start, end);
-  OutsideToCenter(red, green, blue, EyeSize, SpeedDelay, ReturnDelay, start, end);
-  CenterToOutside(red, green, blue, EyeSize, SpeedDelay, ReturnDelay, start, end);
-}
-
-void CenterToOutside(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, int ReturnDelay, int start, int end) {
-  int mid = (start + end) / 2;
-  for (int i = mid; i >= start; i--) {
-    setAll(0, 0, 0, start, end);
-    setPixel(i, red / 10, green / 10, blue / 10);
-    for (int j = 1; j <= EyeSize; j++) {
-      if (i + j <= end) setPixel(i + j, red, green, blue);
-    }
-    if (i + EyeSize + 1 <= end) setPixel(i + EyeSize + 1, red / 10, green / 10, blue / 10);
-    setPixel(end - (i - start), red / 10, green / 10, blue / 10);
-    for (int j = 1; j <= EyeSize; j++) {
-      if (end - (i - start) - j >= start) setPixel(end - (i - start) - j, red, green, blue);
-    }
-    if (end - (i - start) - EyeSize - 1 >= start) setPixel(end - (i - start) - EyeSize - 1, red / 10, green / 10, blue / 10);
-    showStrip();
-    delay(SpeedDelay);
-  }
-  delay(ReturnDelay);
-}
-
-void OutsideToCenter(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, int ReturnDelay, int start, int end) {
-  int mid = (start + end) / 2;
-  for (int i = start; i <= mid; i++) {
-    setAll(0, 0, 0, start, end);
-    setPixel(i, red / 10, green / 10, blue / 10);
-    for (int j = 1; j <= EyeSize; j++) {
-      if (i + j <= end) setPixel(i + j, red, green, blue);
-    }
-    if (i + EyeSize + 1 <= end) setPixel(i + EyeSize + 1, red / 10, green / 10, blue / 10);
-    setPixel(end - (i - start), red / 10, green / 10, blue / 10);
-    for (int j = 1; j <= EyeSize; j++) {
-      if (end - (i - start) - j >= start) setPixel(end - (i - start) - j, red, green, blue);
-    }
-    if (end - (i - start) - EyeSize - 1 >= start) setPixel(end - (i - start) - EyeSize - 1, red / 10, green / 10, blue / 10);
-    showStrip();
-    delay(SpeedDelay);
-  }
-  delay(ReturnDelay);
-}
-
-void LeftToRight(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, int ReturnDelay, int start, int end) {
-  for (int i = start; i <= end - EyeSize - 2; i++) {
-    setAll(0, 0, 0, start, end);
-    setPixel(i, red / 10, green / 10, blue / 10);
-    for (int j = 1; j <= EyeSize; j++) {
-      setPixel(i + j, red, green, blue);
-    }
-    setPixel(i + EyeSize + 1, red / 10, green / 10, blue / 10);
-    showStrip();
-    delay(SpeedDelay);
-  }
-  delay(ReturnDelay);
-}
-
-void RightToLeft(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, int ReturnDelay, int start, int end) {
-  for (int i = end - EyeSize - 2; i >= start; i--) {
-    setAll(0, 0, 0, start, end);
-    setPixel(i, red / 10, green / 10, blue / 10);
-    for (int j = 1; j <= EyeSize; j++) {
-      setPixel(i + j, red, green, blue);
-    }
-    setPixel(i + EyeSize + 1, red / 10, green / 10, blue / 10);
-    showStrip();
-    delay(SpeedDelay);
-  }
-  delay(ReturnDelay);
-}
-
-void Twinkle(byte red, byte green, byte blue, int Count, int SpeedDelay, boolean OnlyOne, int start, int end) {
-  setAll(0, 0, 0, start, end);
-  for (int i = 0; i < Count; i++) {
-    setPixel(random(start, end + 1), red, green, blue);
-    showStrip();
-    delay(SpeedDelay);
-    if (OnlyOne) {
-      setAll(0, 0, 0, start, end);
-    }
-  }
-  delay(SpeedDelay);
-}
-
-void TwinkleRandom(int Count, int SpeedDelay, boolean OnlyOne, int start, int end) {
-  setAll(0, 0, 0, start, end);
-  for (int i = 0; i < Count; i++) {
-    setPixel(random(start, end + 1), random(0, 255), random(0, 255), random(0, 255));
-    showStrip();
-    delay(SpeedDelay);
-    if (OnlyOne) {
-      setAll(0, 0, 0, start, end);
-    }
-  }
-  delay(SpeedDelay);
-}
-
-void Sparkle(byte red, byte green, byte blue, int SpeedDelay, int start, int end) {
-  int Pixel = random(start, end + 1);
-  setPixel(Pixel, red, green, blue);
-  showStrip();
-  delay(SpeedDelay);
-  setPixel(Pixel, 0, 0, 0);
-}
-
-void SnowSparkle(byte red, byte green, byte blue, int SparkleDelay, int SpeedDelay, int start, int end) {
-  setAll(red, green, blue, start, end);
-  int Pixel = random(start, end + 1);
-  setPixel(Pixel, 255, 255, 255);
-  showStrip();
-  delay(SparkleDelay);
-  setPixel(Pixel, red, green, blue);
-  showStrip();
-  delay(SpeedDelay);
-}
-
-void RunningLights(byte red, byte green, byte blue, int WaveDelay, int start, int end) {
-  int Position = 0;
-  for (int i = 0; i < (end - start + 1) * 2; i++) {
-    Position++;
-    for (int j = start; j <= end; j++) {
-      setPixel(j, ((sin((j - start) + Position) * 127 + 128) / 255) * red,
-               ((sin((j - start) + Position) * 127 + 128) / 255) * green,
-               ((sin((j - start) + Position) * 127 + 128) / 255) * blue);
-    }
-    showStrip();
-    delay(WaveDelay);
-  }
-}
-
-void colorWipe(byte red, byte green, byte blue, int SpeedDelay, int start, int end) {
-  for (int i = start; i <= end; i++) {
-    setPixel(i, red, green, blue);
-    showStrip();
-    delay(SpeedDelay);
-  }
-}
-
-void rainbowCycle(int SpeedDelay, int start, int end) {
-  byte *c;
-  uint16_t i, j;
-  for (j = 0; j < 256 * 5; j++) {
-    for (i = start; i <= end; i++) {
-      c = Wheel(((i - start) * 256 / (end - start + 1) + j) & 255);
-      setPixel(i, *c, *(c + 1), *(c + 2));
-    }
-    showStrip();
-    delay(SpeedDelay);
-  }
-}
-
-byte *Wheel(byte WheelPos) {
-  static byte c[3];
-  if (WheelPos < 85) {
-    c[0] = WheelPos * 3;
-    c[1] = 255 - WheelPos * 3;
-    c[2] = 0;
-  } else if (WheelPos < 170) {
-    WheelPos -= 85;
-    c[0] = 255 - WheelPos * 3;
-    c[1] = 0;
-    c[2] = WheelPos * 3;
   } else {
-    WheelPos -= 170;
-    c[0] = 0;
-    c[1] = WheelPos * 3;
-    c[2] = 255 - WheelPos * 3;
-  }
-  return c;
-}
-
-void theaterChase(byte red, byte green, byte blue, int SpeedDelay, int start, int end) {
-  for (int j = 0; j < 10; j++) {
-    for (int q = 0; q < 3; q++) {
-      for (int i = start; i <= end; i += 3) {
-        if (i + q <= end) setPixel(i + q, red, green, blue);
-      }
-      showStrip();
-      delay(SpeedDelay);
-      for (int i = start; i <= end; i += 3) {
-        if (i + q <= end) setPixel(i + q, 0, 0, 0);
-      }
+    for (int i = continents[currentContinent].start; i <= continents[currentContinent].end; i++) {
+      leds[i] = color;
     }
   }
 }
 
-void theaterChaseRainbow(int SpeedDelay, int start, int end) {
-  byte *c;
-  for (int j = 0; j < 256; j++) {
-    for (int q = 0; q < 3; q++) {
-      for (int i = start; i <= end; i += 3) {
-        if (i + q <= end) {
-          c = Wheel((i - start + j) % 255);
-          setPixel(i + q, *c, *(c + 1), *(c + 2));
-        }
-      }
-      showStrip();
-      delay(SpeedDelay);
-      for (int i = start; i <= end; i += 3) {
-        if (i + q <= end) setPixel(i + q, 0, 0, 0);
-      }
-    }
+void setLeds(CHSV color) {
+  setLeds(CRGB(color)); // Convert CHSV to CRGB
+}
+
+void oceanEffect() {
+  uint8_t beat = beatsin8(10, 0, 255);
+  setLeds(CHSV(160 + (beat / 16), 200, beat));
+}
+
+void fireEffect() {
+  for (int i = continents[currentMode == CONTINENT ? currentContinent : 0].start; 
+       i <= continents[currentMode == CONTINENT ? currentContinent : 6].end; i++) {
+    leds[i] = CRGB(HeatColor(random8(160, 255)));
   }
 }
 
-void Fire(int Cooling, int Sparking, int SpeedDelay, int start, int end) {
-  static byte heat[NUM_LEDS];
-  int cooldown;
-  for (int i = start; i <= end; i++) {
-    cooldown = random(0, ((Cooling * 10) / (end - start + 1)) + 2);
-    if (cooldown > heat[i]) {
-      heat[i] = 0;
-    } else {
-      heat[i] = heat[i] - cooldown;
-    }
-  }
-  for (int k = end; k >= start + 2; k--) {
-    heat[k] = (heat[k - 1] + heat[k - 2] + heat[k - 2]) / 3;
-  }
-  if (random(255) < Sparking) {
-    int y = random(start, start + 7);
-    if (y <= end) heat[y] = heat[y] + random(160, 255);
-  }
-  for (int j = start; j <= end; j++) {
-    setPixelHeatColor(j, heat[j]);
-  }
-  showStrip();
-  delay(SpeedDelay);
+void colorWipe() {
+  static int pos = 0;
+  setLeds(CRGB::Black);
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  leds[(start + pos) % (end + 1)] = CRGB(CHSV(hue++, 255, 255));
+  pos = (pos + 1) % (end - start + 1);
 }
 
-void setPixelHeatColor(int Pixel, byte temperature) {
-  byte t192 = round((temperature / 255.0) * 191);
-  byte heatramp = t192 & 0x3F;
-  heatramp <<= 2;
-  if (t192 > 0x80) {
-    setPixel(Pixel, 255, 255, heatramp);
-  } else if (t192 > 0x40) {
-    setPixel(Pixel, 255, heatramp, 0);
+void rainbow() {
+  setLeds(CHSV(hue++, 255, 255));
+}
+
+void theaterChase() {
+  static int pos = 0;
+  setLeds(CRGB::Black);
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  for (int i = start; i <= end; i += 3) {
+    leds[(i + pos) % (end + 1)] = CRGB(CHSV(hue, 255, 255));
+  }
+  pos = (pos + 1) % 3;
+}
+
+void runningLights() {
+  static int pos = 0;
+  setLeds(CRGB::Black);
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  leds[(start + pos) % (end + 1)] = CRGB(CHSV(hue, 255, 255));
+  pos = (pos + 1) % (end - start + 1);
+}
+
+void fadeInOut() {
+  uint8_t brightness = beatsin8(10, 0, 255);
+  setLeds(CHSV(hue, 255, brightness));
+}
+
+void twinkle() {
+  setLeds(CRGB::Black);
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  leds[random(start, end + 1)] = CRGB(CHSV(random8(), 255, 255));
+}
+
+void pulse() {
+  uint8_t brightness = beatsin8(20, 64, 255);
+  setLeds(CHSV(hue, 255, brightness));
+}
+
+void strobe() {
+  static bool on = false;
+  on = !on;
+  setLeds(on ? CRGB(CHSV(hue, 255, 255)) : CRGB::Black);
+}
+
+void colorCycle() {
+  setLeds(CHSV(hue++, 255, 255));
+}
+
+void sparkle() {
+  setLeds(CRGB::Black);
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  leds[random(start, end + 1)] = CRGB::White;
+}
+
+void breathe() {
+  uint8_t brightness = beatsin8(5, 0, 255);
+  setLeds(CHSV(hue, 255, brightness));
+}
+
+void meteorRain() {
+  static int pos = 0;
+  setLeds(CRGB::Black);
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  for (int i = 0; i < 10; i++) {
+    if (pos - i >= start && pos - i <= end) {
+      leds[pos - i] = CRGB(CHSV(hue, 255, 255 - (i * 25)));
+    }
+  }
+  pos = (pos + 1) % (end - start + 1);
+}
+
+void cylon() {
+  static int pos = 0;
+  static bool forward = true;
+  setLeds(CRGB::Black);
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  leds[start + pos] = CRGB(CHSV(hue, 255, 255));
+  if (forward) {
+    pos++;
+    if (pos >= end - start) forward = false;
   } else {
-    setPixel(Pixel, heatramp, 0, 0);
+    pos--;
+    if (pos <= 0) forward = true;
   }
 }
 
-void BouncingColoredBalls(int BallCount, byte colors[][3], boolean continuous, int start, int end) {
-  float Gravity = -9.81;
-  int StartHeight = 1;
-  float Height[BallCount];
-  float ImpactVelocityStart = sqrt(-2 * Gravity * StartHeight);
-  float ImpactVelocity[BallCount];
-  float TimeSinceLastBounce[BallCount];
-  int Position[BallCount];
-  long ClockTimeSinceLastBounce[BallCount];
-  float Dampening[BallCount];
-  boolean ballBouncing[BallCount];
-  boolean ballsStillBouncing = true;
-
-  for (int i = 0; i < BallCount; i++) {
-    ClockTimeSinceLastBounce[i] = millis();
-    Height[i] = StartHeight;
-    Position[i] = start;
-    ImpactVelocity[i] = ImpactVelocityStart;
-    TimeSinceLastBounce[i] = 0;
-    Dampening[i] = 0.90 - float(i) / pow(BallCount, 2);
-    ballBouncing[i] = true;
-  }
-
-  while (ballsStillBouncing) {
-    for (int i = 0; i < BallCount; i++) {
-      TimeSinceLastBounce[i] = millis() - ClockTimeSinceLastBounce[i];
-      Height[i] = 0.5 * Gravity * pow(TimeSinceLastBounce[i] / 1000, 2.0) + ImpactVelocity[i] * TimeSinceLastBounce[i] / 1000;
-      if (Height[i] < 0) {
-        Height[i] = 0;
-        ImpactVelocity[i] = Dampening[i] * ImpactVelocity[i];
-        ClockTimeSinceLastBounce[i] = millis();
-        if (ImpactVelocity[i] < 0.01) {
-          if (continuous) {
-            ImpactVelocity[i] = ImpactVelocityStart;
-          } else {
-            ballBouncing[i] = false;
-          }
-        }
-      }
-      Position[i] = round(Height[i] * (end - start) / StartHeight) + start;
-    }
-
-    ballsStillBouncing = false;
-    for (int i = 0; i < BallCount; i++) {
-      if (Position[i] <= end) setPixel(Position[i], colors[i][0], colors[i][1], colors[i][2]);
-      if (ballBouncing[i]) ballsStillBouncing = true;
-    }
-    showStrip();
-    setAll(0, 0, 0, start, end);
-  }
-}
-
-void meteorRain(byte red, byte green, byte blue, byte meteorSize, byte meteorTrailDecay, boolean meteorRandomDecay, int SpeedDelay, int start, int end) {
-  setAll(0, 0, 0, start, end);
-  for (int i = start; i < end + (end - start + 1); i++) {
-    for (int j = start; j <= end; j++) {
-      if ((!meteorRandomDecay) || (random(10) > 5)) {
-        leds[j].fadeToBlackBy(meteorTrailDecay);
-      }
-    }
-    for (int j = 0; j < meteorSize; j++) {
-      if ((i - j <= end) && (i - j >= start)) {
-        setPixel(i - j, red, green, blue);
-      }
-    }
-    showStrip();
-    delay(SpeedDelay);
-  }
-}
-
-// New effects
-void OceanWaves(int start, int end, int SpeedDelay) {
-  // Simulate ocean waves with blue and green hues moving back and forth
-  for (int j = 0; j < 256; j++) {
-    for (int i = start; i <= end; i++) {
-      byte blue = (sin((i - start + j) * 0.1) * 127 + 128);
-      byte green = (sin((i - start + j) * 0.1 + 1.0) * 64 + 64);
-      setPixel(i, 0, green, blue);
-    }
-    showStrip();
-    delay(SpeedDelay);
-  }
-}
-
-void Pulse(byte red, byte green, byte blue, int SpeedDelay, int start, int end) {
-  for (int k = 0; k < 256; k += 2) {
-    float r = (sin(k * 0.05) * 127 + 128) * red / 255.0;
-    float g = (sin(k * 0.05) * 127 + 128) * green / 255.0;
-    float b = (sin(k * 0.05) * 127 + 128) * blue / 255.0;
-    setAll(r, g, b, start, end);
-    delay(SpeedDelay);
-  }
-}
-
-void ColorCycle(int SpeedDelay, int start, int end) {
-  byte *c;
-  for (int j = 0; j < 256; j++) {
-    for (int i = start; i <= end; i++) {
-      c = Wheel(j);
-      setPixel(i, *c, *(c + 1), *(c + 2));
-    }
-    showStrip();
-    delay(SpeedDelay);
-  }
-}
-
-void Breathe(byte red, byte green, byte blue, int SpeedDelay, int start, int end) {
-  for (int k = 0; k < 256; k += 2) {
-    float r = (sin(k * 0.05) * 127 + 128) * red / 255.0;
-    float g = (sin(k * 0.05) * 127 + 128) * green / 255.0;
-    float b = (sin(k * 0.05) * 127 + 128) * blue / 255.0;
-    setAll(r, g, b, start, end);
-    delay(SpeedDelay);
-  }
-}
-
-void Confetti(int SpeedDelay, int start, int end) {
-  setAll(0, 0, 0, start, end);
-  for (int i = 0; i < 20; i++) {
-    setPixel(random(start, end + 1), random(0, 255), random(0, 255), random(0, 255));
-    showStrip();
-    delay(SpeedDelay);
-    setAll(0, 0, 0, start, end);
-  }
+void confetti() {
+  setLeds(CRGB::Black);
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  leds[random(start, end + 1)] = CRGB(CHSV(random8(), 255, 255));
 }
