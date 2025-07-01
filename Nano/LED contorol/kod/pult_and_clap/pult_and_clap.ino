@@ -3,7 +3,7 @@
 #include <EEPROM.h>
 
 // LED Configuration
-#define NUM_LEDS 280
+#define NUM_LEDS 40
 #define DATA_PIN 6
 CRGB leds[NUM_LEDS];
 
@@ -25,20 +25,20 @@ CRGB leds[NUM_LEDS];
 #define AUTO 429064
 
 // Continent LED ranges
-#define ASIA_START 0
-#define ASIA_END 50
-#define AFRICA_START 51
-#define AFRICA_END 100
-#define EUROPE_START 101
-#define EUROPE_END 150
-#define NORTH_AMERICA_START 151
-#define NORTH_AMERICA_END 200
-#define SOUTH_AMERICA_START 201
-#define SOUTH_AMERICA_END 230
-#define AUSTRALIA_START 231
-#define AUSTRALIA_END 260
-#define ANTARCTICA_START 261
-#define ANTARCTICA_END 279
+#define ASIA_START 1
+#define ASIA_END 3
+#define AFRICA_START 4
+#define AFRICA_END 10
+#define EUROPE_START 11
+#define EUROPE_END 15
+#define NORTH_AMERICA_START 16
+#define NORTH_AMERICA_END 20
+#define SOUTH_AMERICA_START 21
+#define SOUTH_AMERICA_END 30
+#define AUSTRALIA_START 31
+#define AUSTRALIA_END 35
+#define ANTARCTICA_START 36
+#define ANTARCTICA_END 40
 
 // Pins
 #define MIC_PIN 7
@@ -55,6 +55,8 @@ uint8_t effectSpeed = 50; // 0-100 scale
 unsigned long lastUpdate = 0;
 unsigned long autoTimer = 0;
 bool isTransitioning = false;
+bool isFireAnimating = false; // Track fire animation state
+int firePos = 0; // Position for fire effect animation
 
 // Clap Detection
 unsigned long lastClapTime = 0;
@@ -119,7 +121,13 @@ void handleRF() {
     long code = mySwitch.getReceivedValue();
     mySwitch.resetAvailable();
     
-    if (code == 0) return;
+    if (code == 0) {
+      Serial.println("Signalni o'qib bo'lmadi.");
+      return;
+    }
+    
+    Serial.print("Qabul qilingan kod: ");
+    Serial.println(code);
     
     switch (code) {
       case POWER:
@@ -138,21 +146,13 @@ void handleRF() {
         effectSpeed = max(0, effectSpeed - 10);
         break;
       case CONTINENT_PLUS:
-        if (currentMode != CONTINENT) {
-          currentMode = CONTINENT;
-          currentContinent = 0;
-        } else {
-          currentContinent = (currentContinent + 1) % 7;
-        }
+        currentMode = CONTINENT;
+        currentContinent = (currentContinent + 1) % 7;
         startTransition();
         break;
       case CONTINENT_MINUS:
-        if (currentMode != CONTINENT) {
-          currentMode = CONTINENT;
-          currentContinent = 0;
-        } else {
-          currentContinent = (currentContinent - 1 + 7) % 7;
-        }
+        currentMode = CONTINENT;
+        currentContinent = (currentContinent - 1 + 7) % 7;
         startTransition();
         break;
       case AUTO:
@@ -207,12 +207,14 @@ void processClaps() {
 
 void togglePower() {
   powerState = !powerState;
+  isFireAnimating = false; // Reset fire animation on power toggle
   if (!powerState) {
     FastLED.clear();
     FastLED.show();
   } else {
     startTransition();
   }
+  saveState();
 }
 
 void changeMode(int direction) {
@@ -226,12 +228,12 @@ void changeMode(int direction) {
   } else {
     lastEffect = currentEffect;
   }
+  isFireAnimating = false; // Reset fire animation on mode change
   startTransition();
 }
 
 void startTransition() {
   isTransitioning = true;
-  unsigned long startTime = millis();
   for (int i = 0; i < NUM_LEDS; i++) {
     leds[i] = CRGB::Black;
   }
@@ -241,16 +243,17 @@ void startTransition() {
   for (int i = 0; i < 5; i++) {
     setLeds(CHSV(random8(), 255, 255));
     FastLED.show();
-    delay(100);
+    delay(50); // Reduced delay for faster transition
     setLeds(CRGB::Black);
     FastLED.show();
-    delay(100);
+    delay(50);
   }
   isTransitioning = false;
 }
 
 void setColorEffect(long code) {
   currentMode = FULL_LED;
+  isFireAnimating = false; // Reset fire animation
   switch (code) {
     case WHITE: currentEffect = 1; break;
     case RED: currentEffect = 2; break;
@@ -278,37 +281,42 @@ void updateAnimation() {
   if (currentEffect == 0 && millis() - autoTimer > 10000) {
     currentEffect = (lastEffect % 23) + 1;
     lastEffect = currentEffect;
+    isFireAnimating = false; // Reset fire animation
     autoTimer = millis();
   }
   
   FastLED.clear();
   
-  switch (currentEffect) {
-    case 0: // Auto (handled above)
-      break;
-    case 1: setLeds(CRGB::White); break;
-    case 2: setLeds(CRGB::Red); break;
-    case 3: setLeds(CRGB::Green); break;
-    case 4: setLeds(CRGB::Yellow); break;
-    case 5: setLeds(CRGB(135, 206, 250)); break; // LightBlue
-    case 6: setLeds(CRGB::Pink); break;
-    case 7: oceanEffect(); break;
-    case 8: fireEffect(); break;
-    case 9: colorWipe(); break;
-    case 10: rainbow(); break;
-    case 11: theaterChase(); break;
-    case 12: runningLights(); break;
-    case 13: fadeInOut(); break;
-    case 14: twinkle(); break;
-    case 15: fireEffect(); break;
-    case 16: pulse(); break;
-    case 17: strobe(); break;
-    case 18: colorCycle(); break;
-    case 19: sparkle(); break;
-    case 20: breathe(); break;
-    case 21: meteorRain(); break;
-    case 22: cylon(); break;
-    case 23: confetti(); break;
+  if (isFireAnimating) {
+    fireEffect();
+  } else {
+    switch (currentEffect) {
+      case 0: // Auto (handled above)
+        break;
+      case 1: setLeds(CRGB::White); break;
+      case 2: setLeds(CRGB::Red); break;
+      case 3: setLeds(CRGB::Green); break;
+      case 4: setLeds(CRGB::Yellow); break;
+      case 5: setLeds(CRGB(135, 206, 250)); break; // LightBlue
+      case 6: setLeds(CRGB::Pink); break;
+      case 7: oceanEffect(); break;
+      case 8: startFireEffect(); break;
+      case 9: colorWipe(); break;
+      case 10: rainbow(); break;
+      case 11: theaterChase(); break;
+      case 12: runningLights(); break;
+      case 13: fadeInOut(); break;
+      case 14: twinkle(); break;
+      case 15: fireEffect(); break; // Note: Effect 15 is also fire, so we'll redirect to startFireEffect
+      case 16: pulse(); break;
+      case 17: strobe(); break;
+      case 18: colorCycle(); break;
+      case 19: sparkle(); break;
+      case 20: breathe(); break;
+      case 21: meteorRain(); break;
+      case 22: cylon(); break;
+      case 23: confetti(); break;
+    }
   }
   FastLED.show();
 }
@@ -329,16 +337,36 @@ void setLeds(CHSV color) {
   setLeds(CRGB(color)); // Convert CHSV to CRGB
 }
 
-void oceanEffect() {
-  uint8_t beat = beatsin8(10, 0, 255);
-  setLeds(CHSV(160 + (beat / 16), 200, beat));
+void startFireEffect() {
+  isFireAnimating = true;
+  firePos = 0; // Start from beginning
 }
 
 void fireEffect() {
-  for (int i = continents[currentMode == CONTINENT ? currentContinent : 0].start; 
-       i <= continents[currentMode == CONTINENT ? currentContinent : 6].end; i++) {
-    leds[i] = CRGB(HeatColor(random8(160, 255)));
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  
+  // Clear LEDs
+  setLeds(CRGB::Black);
+  
+  // Animate flame from start to end
+  for (int i = 0; i <= firePos && (start + i) <= end; i++) {
+    uint8_t heat = random8(160, 255); // Random heat value for flame
+    leds[start + i] = CRGB(HeatColor(heat));
   }
+  
+  firePos++;
+  
+  // When animation reaches the end, switch to last mode or mode 1
+  if (start + firePos > end) {
+    isFireAnimating = false;
+    currentEffect = (lastEffect == 0 || lastEffect == 8 || lastEffect == 15) ? 1 : lastEffect;
+  }
+}
+
+void oceanEffect() {
+  uint8_t beat = beatsin8(10, 0, 255);
+  setLeds(CHSV(160 + (beat / 16), 200, beat));
 }
 
 void colorWipe() {
