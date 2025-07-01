@@ -23,7 +23,7 @@ CRGB leds[NUM_LEDS];
 #define LIGHT_BLUE 429076
 #define PINK 429077
 #define AUTO 429064
-#define BUTTON_100 429100 // Yangi 100 tugmasi
+#define BUTTON_100 429100 // Piliblab yonib-o‘chadigan effekt
 
 // Qit’a LED diapazonlari
 #define ASIA_START 0
@@ -59,6 +59,8 @@ bool isTransitioning = false;
 int firePos = 0;
 uint8_t hue = 0;
 uint8_t pos = 0;
+unsigned long lastButtonTime = 0; // Tugma debouncing uchun
+const unsigned long BUTTON_DEBOUNCE = 1000; // 1 soniya debouncing
 
 // Clap aniqlash
 unsigned long lastClapTime = 0;
@@ -94,7 +96,7 @@ void setup() {
   Serial.println("433 MHz RF signal qabul qiluvchisi tayyor...");
   
   currentEffect = EEPROM.read(0);
-  if (currentEffect > 20) {
+  if (currentEffect > 23) {
     currentEffect = 0;
   }
   lastEffect = (currentEffect == 0) ? 1 : currentEffect;
@@ -123,6 +125,14 @@ void handleRF() {
       mySwitch.enableReceive(0);
       return;
     }
+    
+    if (millis() - lastButtonTime < BUTTON_DEBOUNCE) {
+      Serial.println("Tugma ikki marta bosilishi oldi olindi");
+      mySwitch.resetAvailable();
+      return;
+    }
+    
+    lastButtonTime = millis();
     
     Serial.print("Qabul qilingan kod: ");
     Serial.println(code);
@@ -262,14 +272,8 @@ void togglePower() {
     FastLED.show();
   } else {
     Serial.println("Quvvat yoqildi");
-    for (int i = 0; i < 5; i++) {
-      setLeds(CHSV(random8(), 255, 255));
-      FastLED.show();
-      delay(50);
-      FastLED.clear();
-      FastLED.show();
-      delay(50);
-    }
+     youtubeAnimation();
+    
   }
   saveState();
 }
@@ -282,7 +286,7 @@ void changeMode(int direction) {
   if (currentEffect == 0) {
     currentEffect = lastEffect;
   }
-  currentEffect = (currentEffect + direction + 21) % 21;
+  currentEffect = (currentEffect + direction + 24) % 24;
   if (currentEffect == 0) {
     lastEffect = (lastEffect == 0) ? 1 : lastEffect;
   } else {
@@ -333,7 +337,7 @@ void updateAnimation() {
   interrupts();
   
   if (currentEffect == 0 && millis() - autoTimer > 10000) {
-    currentEffect = (lastEffect % 20) + 1;
+    currentEffect = (lastEffect % 23) + 1;
     lastEffect = currentEffect;
     firePos = 0;
     pos = 0;
@@ -368,6 +372,9 @@ void updateAnimation() {
     case 18: gradientFlow(); break;
     case 19: slowCylon(); break;
     case 20: confettiGlow(); break;
+    case 21: gradientTransition(); break;
+    case 22: rainbowCycle(); break;
+    case 23: staticColors(); break;
   }
   FastLED.show();
 }
@@ -479,4 +486,52 @@ void confettiGlow() {
   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
   leds[random(start, end + 1)] = CRGB(CHSV(160 + random8(40), 200, 255));
+}
+
+void gradientTransition() {
+  static uint8_t startHue = 0;
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  for (int i = start; i <= end; i++) {
+    leds[i] = CHSV(startHue + (i * 5), 200, 255);
+  }
+  startHue += 2;
+}
+
+void rainbowCycle() {
+  static uint8_t startHue = 0;
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  for (int i = start; i <= end; i++) {
+    leds[i] = CHSV(startHue + (i * 255 / (end - start + 1)), 200, 255);
+  }
+  startHue += 2;
+}
+
+void staticColors() {
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  for (int i = start; i <= end; i++) {
+    switch ((i - start) % 7) {
+      case 0: leds[i] = CRGB::White; break;
+      case 1: leds[i] = CRGB::Red; break;
+      case 2: leds[i] = CRGB::Green; break;
+      case 3: leds[i] = CRGB::Blue; break;
+      case 4: leds[i] = CRGB::Yellow; break;
+      case 5: leds[i] = CRGB(135, 206, 250); break;
+      case 6: leds[i] = CRGB::Pink; break;
+    }
+  }
+}
+
+void youtubeAnimation() {
+  static uint8_t startHue = 0;
+  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  
+  for (int i = start; i <= end; i++) {
+    uint8_t brightness = beatsin8(5, 64, 255);
+    leds[i] = CHSV(startHue + (i * 10), 200, brightness);
+  }
+  startHue += 3;
 }
