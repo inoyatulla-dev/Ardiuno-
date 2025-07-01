@@ -25,7 +25,7 @@ CRGB leds[NUM_LEDS];
 #define AUTO 429064
 
 // Continent LED ranges
-#define ASIA_START 1
+#define ASIA_START 0
 #define ASIA_END 3
 #define AFRICA_START 4
 #define AFRICA_END 10
@@ -52,23 +52,20 @@ int currentEffect = 0; // 0=Auto, 1-23 for specific effects
 int lastEffect = 1; // Store last non-auto effect
 bool powerState = false;
 uint8_t effectSpeed = 50; // 0-100 scale
-unsigned long lastUpdate = 0;
+unsigned long lastAnimationUpdate = 0;
+const int ANIMATION_INTERVAL = 20; // Reduced for faster animations
 unsigned long autoTimer = 0;
 bool isTransitioning = false;
-bool isFireAnimating = false; // Track fire animation state
 int firePos = 0; // Position for fire effect animation
+uint8_t hue = 0; // Global hue for animations
+uint8_t pos = 0; // Global position for animations
 
 // Clap Detection
 unsigned long lastClapTime = 0;
 int clapCount = 0;
 unsigned long clapWindowStart = 0;
 const unsigned long CLAP_WINDOW = 3000; // 3 seconds
-
-// Animation States
-uint8_t hue = 0;
-uint8_t pos = 0;
-unsigned long lastAnimationUpdate = 0;
-const int ANIMATION_INTERVAL = 50; // Base animation speed
+const unsigned long CLAP_DEBOUNCE = 200; // Debounce time for claps
 
 RCSwitch mySwitch = RCSwitch();
 
@@ -93,7 +90,8 @@ void setup() {
   
   pinMode(MIC_PIN, INPUT);
   Serial.begin(9600);
-  mySwitch.enableReceive(0); // D2 pin
+  mySwitch.enableReceive(0); // D2 pin, interrupt 0
+  Serial.println("433 MHz RF signal receiver ready...");
   
   // Load saved state
   currentMode = (Mode)EEPROM.read(0);
@@ -109,24 +107,30 @@ void setup() {
 }
 
 void loop() {
-  handleRF();
+  // Prioritize RF and clap detection
   handleClaps();
+  handleRF();
+ 
+  
+  // Update animations only if powered on and not transitioning
   if (powerState && !isTransitioning) {
     updateAnimation();
   }
 }
 
 void handleRF() {
+  Serial.println("Signal rf.");
   if (mySwitch.available()) {
+    Serial.println("Signal available ."); 
     long code = mySwitch.getReceivedValue();
     mySwitch.resetAvailable();
     
     if (code == 0) {
-      Serial.println("Signalni o'qib bo'lmadi.");
+      Serial.println("Signal could not be read.");
       return;
     }
     
-    Serial.print("Qabul qilingan kod: ");
+    Serial.print("Received code: ");
     Serial.println(code);
     
     switch (code) {
@@ -135,33 +139,48 @@ void handleRF() {
         break;
       case MODE_PLUS:
         changeMode(1);
+        startTransition();
         break;
       case MODE_MINUS:
         changeMode(-1);
+        startTransition();
         break;
       case SPEED_PLUS:
         effectSpeed = min(100, effectSpeed + 10);
+        Serial.print("Speed increased: ");
+        Serial.println(effectSpeed);
         break;
       case SPEED_MINUS:
         effectSpeed = max(0, effectSpeed - 10);
+        Serial.print("Speed decreased: ");
+        Serial.println(effectSpeed);
         break;
       case CONTINENT_PLUS:
         currentMode = CONTINENT;
         currentContinent = (currentContinent + 1) % 7;
+        Serial.print("Continent mode: ");
+        Serial.println(currentContinent);
         startTransition();
         break;
       case CONTINENT_MINUS:
         currentMode = CONTINENT;
         currentContinent = (currentContinent - 1 + 7) % 7;
+        Serial.print("Continent mode: ");
+        Serial.println(currentContinent);
         startTransition();
         break;
       case AUTO:
         currentMode = FULL_LED;
         currentEffect = 0;
+        Serial.println("Auto mode activated");
         startTransition();
         break;
       case WHITE: case RED: case GREEN: case BLUE: case YELLOW: case LIGHT_BLUE: case PINK:
         setColorEffect(code);
+        startTransition();
+        break;
+      default:
+        Serial.println("Unknown RF code");
         break;
     }
     saveState();
@@ -169,12 +188,14 @@ void handleRF() {
 }
 
 void handleClaps() {
-  if (digitalRead(MIC_PIN) == HIGH && millis() - lastClapTime > 200) {
+  if (digitalRead(MIC_PIN) == HIGH && millis() - lastClapTime >= CLAP_DEBOUNCE) {
     if (clapWindowStart == 0) {
       clapWindowStart = millis();
     }
     clapCount++;
     lastClapTime = millis();
+    Serial.print("Clap detected: ");
+    Serial.println(clapCount);
   }
   
   if (clapWindowStart > 0 && millis() - clapWindowStart > CLAP_WINDOW) {
@@ -185,11 +206,15 @@ void handleClaps() {
 }
 
 void processClaps() {
+  Serial.print("Processing claps: ");
+  Serial.println(clapCount);
   if (clapCount == 1) {
     togglePower();
   } else if (clapCount == 2) {
     if (currentMode == CONTINENT) {
       currentContinent = (currentContinent + 1) % 7;
+      Serial.print("Next continent: ");
+      Serial.println(currentContinent);
     } else {
       changeMode(1);
     }
@@ -197,6 +222,8 @@ void processClaps() {
   } else if (clapCount == 3) {
     if (currentMode == CONTINENT) {
       currentContinent = (currentContinent - 1 + 7) % 7;
+      Serial.print("Previous continent: ");
+      Serial.println(currentContinent);
     } else {
       changeMode(-1);
     }
@@ -207,18 +234,37 @@ void processClaps() {
 
 void togglePower() {
   powerState = !powerState;
-  isFireAnimating = false; // Reset fire animation on power toggle
+  firePos = 0; // Reset fire animation
+  Serial.print("Power state: ");
+  Serial.println(powerState ? "ON" : "OFF");
+  
   if (!powerState) {
-    FastLED.clear();
-    FastLED.show();
+    // Power off: Flash animation
+    for (int i = 0; i < 5; i++) {
+      setLeds(CHSV(random8(), 255, 255));
+      FastLED.show();
+      delay(50);
+      setLeds(CRGB::Black);
+      FastLED.show();
+      delay(50);
+    }
   } else {
-    startTransition();
+    // Power on: Flash animation
+    for (int i = 0; i < 5; i++) {
+      setLeds(CHSV(random8(), 255, 255));
+      FastLED.show();
+      delay(50);
+      setLeds(CRGB::Black);
+      FastLED.show();
+      delay(50);
+    }
   }
   saveState();
 }
 
 void changeMode(int direction) {
   currentMode = FULL_LED;
+  firePos = 0; // Reset fire animation
   if (currentEffect == 0) {
     currentEffect = lastEffect;
   }
@@ -228,32 +274,25 @@ void changeMode(int direction) {
   } else {
     lastEffect = currentEffect;
   }
-  isFireAnimating = false; // Reset fire animation on mode change
-  startTransition();
+  Serial.print("Mode changed to: ");
+  Serial.println(currentEffect);
 }
 
 void startTransition() {
   isTransitioning = true;
+  firePos = 0; // Reset fire animation
+  pos = 0; // Reset position for other animations
+  hue = 0; // Reset hue for animations
   for (int i = 0; i < NUM_LEDS; i++) {
     leds[i] = CRGB::Black;
   }
   FastLED.show();
-  
-  // Flash transition
-  for (int i = 0; i < 5; i++) {
-    setLeds(CHSV(random8(), 255, 255));
-    FastLED.show();
-    delay(50); // Reduced delay for faster transition
-    setLeds(CRGB::Black);
-    FastLED.show();
-    delay(50);
-  }
   isTransitioning = false;
 }
 
 void setColorEffect(long code) {
   currentMode = FULL_LED;
-  isFireAnimating = false; // Reset fire animation
+  firePos = 0; // Reset fire animation
   switch (code) {
     case WHITE: currentEffect = 1; break;
     case RED: currentEffect = 2; break;
@@ -263,7 +302,8 @@ void setColorEffect(long code) {
     case PINK: currentEffect = 6; break;
   }
   lastEffect = currentEffect;
-  startTransition();
+  Serial.print("Color effect set: ");
+  Serial.println(currentEffect);
 }
 
 void saveState() {
@@ -281,42 +321,41 @@ void updateAnimation() {
   if (currentEffect == 0 && millis() - autoTimer > 10000) {
     currentEffect = (lastEffect % 23) + 1;
     lastEffect = currentEffect;
-    isFireAnimating = false; // Reset fire animation
+    firePos = 0; // Reset fire animation
+    pos = 0; // Reset position
     autoTimer = millis();
+    Serial.print("Auto mode switched to effect: ");
+    Serial.println(currentEffect);
   }
   
   FastLED.clear();
   
-  if (isFireAnimating) {
-    fireEffect();
-  } else {
-    switch (currentEffect) {
-      case 0: // Auto (handled above)
-        break;
-      case 1: setLeds(CRGB::White); break;
-      case 2: setLeds(CRGB::Red); break;
-      case 3: setLeds(CRGB::Green); break;
-      case 4: setLeds(CRGB::Yellow); break;
-      case 5: setLeds(CRGB(135, 206, 250)); break; // LightBlue
-      case 6: setLeds(CRGB::Pink); break;
-      case 7: oceanEffect(); break;
-      case 8: startFireEffect(); break;
-      case 9: colorWipe(); break;
-      case 10: rainbow(); break;
-      case 11: theaterChase(); break;
-      case 12: runningLights(); break;
-      case 13: fadeInOut(); break;
-      case 14: twinkle(); break;
-      case 15: fireEffect(); break; // Note: Effect 15 is also fire, so we'll redirect to startFireEffect
-      case 16: pulse(); break;
-      case 17: strobe(); break;
-      case 18: colorCycle(); break;
-      case 19: sparkle(); break;
-      case 20: breathe(); break;
-      case 21: meteorRain(); break;
-      case 22: cylon(); break;
-      case 23: confetti(); break;
-    }
+  switch (currentEffect) {
+    case 0: // Auto (handled above)
+      break;
+    case 1: setLeds(CRGB::White); break;
+    case 2: setLeds(CRGB::Red); break;
+    case 3: setLeds(CRGB::Green); break;
+    case 4: setLeds(CRGB::Yellow); break;
+    case 5: setLeds(CRGB(135, 206, 250)); break; // LightBlue
+    case 6: setLeds(CRGB::Pink); break;
+    case 7: oceanEffect(); break;
+    case 8: fireEffect(); break;
+    case 9: colorWipe(); break;
+    case 10: rainbow(); break;
+    case 11: theaterChase(); break;
+    case 12: runningLights(); break;
+    case 13: fadeInOut(); break;
+    case 14: twinkle(); break;
+    case 15: fireEffect(); break; // Same as mode 8
+    case 16: pulse(); break;
+    case 17: strobe(); break;
+    case 18: colorCycle(); break;
+    case 19: sparkle(); break;
+    case 20: breathe(); break;
+    case 21: meteorRain(); break;
+    case 22: cylon(); break;
+    case 23: confetti(); break;
   }
   FastLED.show();
 }
@@ -337,11 +376,6 @@ void setLeds(CHSV color) {
   setLeds(CRGB(color)); // Convert CHSV to CRGB
 }
 
-void startFireEffect() {
-  isFireAnimating = true;
-  firePos = 0; // Start from beginning
-}
-
 void fireEffect() {
   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
@@ -349,19 +383,12 @@ void fireEffect() {
   // Clear LEDs
   setLeds(CRGB::Black);
   
-  // Animate flame from start to end
-  for (int i = 0; i <= firePos && (start + i) <= end; i++) {
-    uint8_t heat = random8(160, 255); // Random heat value for flame
-    leds[start + i] = CRGB(HeatColor(heat));
+  // Single red-hot pixel moving from start to end
+  if (firePos <= end - start) {
+    leds[start + firePos] = CRGB(255, 50, 0); // Red-hot color
   }
   
-  firePos++;
-  
-  // When animation reaches the end, switch to last mode or mode 1
-  if (start + firePos > end) {
-    isFireAnimating = false;
-    currentEffect = (lastEffect == 0 || lastEffect == 8 || lastEffect == 15) ? 1 : lastEffect;
-  }
+  firePos = (firePos + 1) % (end - start + 1); // Loop back to start for continuous animation
 }
 
 void oceanEffect() {
