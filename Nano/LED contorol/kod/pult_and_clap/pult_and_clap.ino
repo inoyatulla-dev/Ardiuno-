@@ -1,13 +1,14 @@
+
 #include <FastLED.h>
 #include <RCSwitch.h>
 #include <EEPROM.h>
 
-// LED Configuration
-#define NUM_LEDS 52
-#define DATA_PIN 6
+// LED sozlamalari
+#define NUM_LEDS 52 // 40 ta LED
+#define DATA_PIN 6 // LEDlar uchun pin
 CRGB leds[NUM_LEDS];
 
-// RF Remote Codes
+// RF masofaviy boshqaruv kodlari
 #define POWER 429057
 #define MODE_PLUS 429061
 #define MODE_MINUS 429067
@@ -24,7 +25,7 @@ CRGB leds[NUM_LEDS];
 #define PINK 429077
 #define AUTO 429064
 
-// Continent LED ranges
+// Qit’a LED diapazonlari
 #define ASIA_START 0
 #define ASIA_END 3
 #define AFRICA_START 4
@@ -38,34 +39,34 @@ CRGB leds[NUM_LEDS];
 #define AUSTRALIA_START 31
 #define AUSTRALIA_END 35
 #define ANTARCTICA_START 36
-#define ANTARCTICA_END 52 // Adjusted to NUM_LEDS - 1
+#define ANTARCTICA_END 52 // NUM_LEDS - 1 ga moslashtirildi
 
-// Pins
-#define MIC_PIN 7
-#define RF_PIN 2
+// Pinlar
+#define MIC_PIN 7 // Mikrofon pin
+#define RF_PIN 2 // RF moduli pin
 
-// State Management
+// Holat boshqaruvi
 enum Mode { FULL_LED, CONTINENT };
-Mode currentMode = FULL_LED;
-int currentContinent = 0; // 0=Asia, 1=Africa, 2=Europe, 3=North America, 4=South America, 5=Australia, 6=Antarctica
-int currentEffect = 0; // 0=Auto, 1-23 for specific effects
-int lastEffect = 1; // Store last non-auto effect
-bool powerState = false; // Start powered off
-uint8_t effectSpeed = 50; // 0-100 scale
+Mode currentMode = FULL_LED; // Boshlang‘ich rejim: butun LEDlar
+int currentContinent = 0; // 0=Osiyo, 1=Afrika, 2=Yevropa, 3=Shimoliy Amerika, 4=Janubiy Amerika, 5=Avstraliya, 6=Antarktida
+int currentEffect = 0; // 0=Avto, 1-23 maxsus effektlar
+int lastEffect = 1; // Avto bo‘lmagan oxirgi effekt
+bool powerState = false; // O‘chirilgan holda boshlanadi
+uint8_t effectSpeed = 50; // Animatsiya tezligi (0-100)
 unsigned long lastAnimationUpdate = 0;
-const int ANIMATION_INTERVAL = 20; // Reduced for faster animations
+const int ANIMATION_INTERVAL = 30; // Animatsiya yangilanishi (ms), CPU yukini kamaytirish uchun 30ms
 unsigned long autoTimer = 0;
 bool isTransitioning = false;
-int firePos = 0; // Position for fire effect animation
-uint8_t hue = 0; // Global hue for animations
-uint8_t pos = 0; // Global position for animations
+int firePos = 0; // Yong‘in effekti pozitsiyasi
+uint8_t hue = 0; // Animatsiyalar uchun rang
+uint8_t pos = 0; // Animatsiyalar uchun pozitsiya
 
-// Clap Detection
+// Clap aniqlash
 unsigned long lastClapTime = 0;
 int clapCount = 0;
 unsigned long clapWindowStart = 0;
-const unsigned long CLAP_WINDOW = 3000; // 3 seconds
-const unsigned long CLAP_DEBOUNCE = 200; // Debounce time for claps
+const unsigned long CLAP_WINDOW = 3000; // 3 soniya clap oynasi
+const unsigned long CLAP_DEBOUNCE = 200; // Claplar orasidagi kechikish (ms)
 
 RCSwitch mySwitch = RCSwitch();
 
@@ -86,49 +87,50 @@ Continent continents[] = {
 
 void setup() {
   FastLED.addLeds<WS2811, DATA_PIN, RGB>(leds, NUM_LEDS);
-  FastLED.setBrightness(255);
+  FastLED.setBrightness(255); // LED yorqinligi
   
   pinMode(MIC_PIN, INPUT);
   Serial.begin(9600);
-  mySwitch.enableReceive(0); // D2 pin, interrupt 0
-  Serial.println("433 MHz RF signal receiver ready...");
+  mySwitch.enableReceive(0); // RF moduli D2 pinida (interrupt 0)
+  Serial.println("433 MHz RF signal qabul qiluvchisi tayyor...");
   
-  // Load last effect from EEPROM
+  // EEPROM’dan oxirgi effektni yuklash
   currentEffect = EEPROM.read(0);
-  if (currentEffect > 23) { // Validate effect (0-23)
-    currentEffect = 0; // Default to Auto mode if invalid
+  if (currentEffect > 23) { // Agar noto‘g‘ri bo‘lsa, avto rejim
+    currentEffect = 0;
   }
-  lastEffect = (currentEffect == 0) ? 1 : currentEffect; // Set lastEffect
+  lastEffect = (currentEffect == 0) ? 1 : currentEffect; // Avto bo‘lmasa, oxirgi effekt
   
-  // Ensure LEDs are off on startup
+  // Boshlang‘ichda LEDlar o‘chiriladi
   FastLED.clear();
   FastLED.show();
 }
 
 void loop() {
-  // Prioritize RF and clap detection
+  // RF va clap aniqlash birinchi navbatda
   handleRF();
   handleClaps();
   
-  // Update animations only if powered on and not transitioning
+  // LEDlar yoniq bo‘lsa va o‘tish jarayoni bo‘lmasa, animatsiyani yangilash
   if (powerState && !isTransitioning) {
     updateAnimation();
   }
+  
+  // Interruptlar uchun vaqt berish
+  delayMicroseconds(100);
 }
 
 void handleRF() {
   if (mySwitch.available()) {
-    Serial.print("Received code: ");
     long code = mySwitch.getReceivedValue();
-    mySwitch.resetAvailable();
-    
-    
     if (code == 0) {
-      Serial.println("Signal could not be read.");
+      Serial.println("Signal o‘qilmadi.");
+      mySwitch.resetAvailable();
+      mySwitch.enableReceive(0); // Qayta yoqish
       return;
     }
     
-    Serial.print("Received code: ");
+    Serial.print("Qabul qilingan kod: ");
     Serial.println(code);
     
     switch (code) {
@@ -137,71 +139,76 @@ void handleRF() {
         break;
       case MODE_PLUS:
         changeMode(1);
-        if (!powerState) { // Turn on if off
+        if (powerState) { // Agar o‘chiq bo‘lsa, yoqish
           powerState = true;
-          Serial.println("Power turned on by MODE_PLUS");
+          Serial.println("MODE_PLUS orqali yoqildi");
         }
         break;
       case MODE_MINUS:
         changeMode(-1);
-        if (!powerState) { // Turn on if off
-          powerState = true;
-          Serial.println("Power turned on by MODE_MINUS");
+        if (powerState) {
+          Serial.println("MODE_MINUS orqali yoqildi");
         }
         break;
       case SPEED_PLUS:
         effectSpeed = min(100, effectSpeed + 10);
-        Serial.print("Speed increased: ");
+        Serial.print("Tezlik oshirildi: ");
         Serial.println(effectSpeed);
         break;
       case SPEED_MINUS:
         effectSpeed = max(0, effectSpeed - 10);
-        Serial.print("Speed decreased: ");
+        Serial.print("Tezlik kamaytirildi: ");
         Serial.println(effectSpeed);
         break;
       case CONTINENT_PLUS:
+        if (powerState) {
         currentMode = CONTINENT;
         currentContinent = (currentContinent + 1) % 7;
-        Serial.print("Continent mode: ");
+        Serial.print("Qit’a rejimi: ");
         Serial.println(currentContinent);
-        if (!powerState) { // Turn on if off
-          powerState = true;
-          Serial.println("Power turned on by CONTINENT_PLUS");
+        Serial.println("CONTINENT_PLUS orqali yoqildi");
         }
         break;
       case CONTINENT_MINUS:
-        currentMode = CONTINENT;
+      
+        if (powerState) {
+           currentMode = CONTINENT;
         currentContinent = (currentContinent - 1 + 7) % 7;
-        Serial.print("Continent mode: ");
+        Serial.print("Qit’a rejimi: ");
         Serial.println(currentContinent);
-        if (!powerState) { // Turn on if off
-          powerState = true;
-          Serial.println("Power turned on by CONTINENT_MINUS");
+      
+          Serial.println("CONTINENT_MINUS orqali yoqildi");
         }
         break;
       case AUTO:
+        if (powerState) {
         currentMode = FULL_LED;
         currentEffect = 0;
-        Serial.println("Auto mode activated");
-        if (!powerState) { // Turn on if off
-          powerState = true;
-          Serial.println("Power turned on by AUTO");
+        Serial.println("Avto rejim yoqildi");
         }
-        
+
         break;
       case WHITE: case RED: case GREEN: case BLUE: case YELLOW: case LIGHT_BLUE: case PINK:
-        setColorEffect(code);
-        if (!powerState) { // Turn on if off
-          powerState = true;
-          Serial.println("Power turned on by color effect");
+        
+        if (powerState) {
+          setColorEffect(code);
+          Serial.println("Rang effekti orqali yoqildi");
         }
-      
+
         break;
       default:
-        Serial.println("Unknown RF code");
+        Serial.println("Noma’lum RF kodi");
         break;
     }
     saveState();
+    mySwitch.resetAvailable();
+  } else {
+    // Debug: LEDlar yoniq bo‘lsa va RF ma’lumotlari kelmasa
+    static unsigned long lastDebug = 0;
+    if (powerState && millis() - lastDebug >= 1000) {
+      Serial.println("RF ma’lumotlari yo‘q (LEDlar yoniq)");
+      lastDebug = millis();
+    }
   }
 }
 
@@ -212,7 +219,7 @@ void handleClaps() {
     }
     clapCount++;
     lastClapTime = millis();
-    Serial.print("Clap detected: ");
+    Serial.print("Clap aniqlandi: ");
     Serial.println(clapCount);
   }
   
@@ -224,48 +231,48 @@ void handleClaps() {
 }
 
 void processClaps() {
-  Serial.print("Processing claps: ");
+  Serial.print("Claplar qayta ishlanmoqda: ");
   Serial.println(clapCount);
   if (clapCount == 1) {
     togglePower();
   } else if (clapCount == 2) {
     if (currentMode == CONTINENT) {
       currentContinent = (currentContinent + 1) % 7;
-      Serial.print("Next continent: ");
+      Serial.print("Keyingi qit’a: ");
       Serial.println(currentContinent);
     } else {
       changeMode(1);
     }
-    if (!powerState) { // Turn on if off
+    if (!powerState) {
       powerState = true;
-      Serial.println("Power turned on by 2 claps");
+      Serial.println("2 clap orqali yoqildi");
     }
-    
+    startTransition();
   } else if (clapCount == 3) {
     if (currentMode == CONTINENT) {
       currentContinent = (currentContinent - 1 + 7) % 7;
-      Serial.print("Previous continent: ");
+      Serial.print("Oldingi qit’a: ");
       Serial.println(currentContinent);
     } else {
       changeMode(-1);
     }
-    if (!powerState) { // Turn on if off
+    if (!powerState) {
       powerState = true;
-      Serial.println("Power turned on by 3 claps");
+      Serial.println("3 clap orqali yoqildi");
     }
-    
+    startTransition();
   }
   saveState();
 }
 
 void togglePower() {
   powerState = !powerState;
-  firePos = 0; // Reset fire animation
-  Serial.print("Power state: ");
-  Serial.println(powerState ? "ON" : "OFF");
+  firePos = 0; // Yong‘in effekti qayta boshlanadi
+  Serial.print("Quvvat holati: ");
+  Serial.println(powerState ? "YOQILDI" : "O‘CHIRILDI");
   
   if (!powerState) {
-    // Power off: Flash animation
+    // O‘chirish: 500ms chaqnash
     for (int i = 0; i < 5; i++) {
       setLeds(CHSV(random8(), 255, 255));
       FastLED.show();
@@ -275,35 +282,22 @@ void togglePower() {
       delay(50);
     }
   } else {
-    uint8_t trailLength = 10;   // Quyruq uzunligi
-uint8_t starHue = 160; 
-  for (int head = 0; head < NUM_LEDS + trailLength; head++) {
-    // Barcha LEDlarni biroz qoraytirish (iz qoldirish)
-    fadeToBlackBy(leds, NUM_LEDS, 50);
-
-    // Shooting Star boshi
-    if (head < NUM_LEDS) {
-      leds[head] = CHSV(starHue, 255, 255);
+    // Yoqish: 500ms chaqnash
+    for (int i = 0; i < 5; i++) {
+      setLeds(CHSV(random8(), 255, 255));
+      FastLED.show();
+      delay(50);
+      setLeds(CRGB::Black);
+      FastLED.show();
+      delay(50);
     }
-
-    // Quyruq (iz)
-    for (int i = 1; i <= trailLength; i++) {
-      int pos = head - i;
-      if (pos >= 0 && pos < NUM_LEDS) {
-        leds[pos] += CHSV(starHue, 255, 255 - (255 / trailLength) * i);
-      }
-    }
-
-    FastLED.show();
-    delay(30);
-  }
   }
   saveState();
 }
 
 void changeMode(int direction) {
   currentMode = FULL_LED;
-  firePos = 0; // Reset fire animation
+  firePos = 0; // Yong‘in effekti qayta boshlanadi
   if (currentEffect == 0) {
     currentEffect = lastEffect;
   }
@@ -313,15 +307,15 @@ void changeMode(int direction) {
   } else {
     lastEffect = currentEffect;
   }
-  Serial.print("Mode changed to: ");
+  Serial.print("Rejim o‘zgartirildi: ");
   Serial.println(currentEffect);
 }
 
 void startTransition() {
   isTransitioning = true;
-  firePos = 0; // Reset fire animation
-  pos = 0; // Reset position for other animations
-  hue = 0; // Reset hue for animations
+  firePos = 0; // Yong‘in effekti qayta boshlanadi
+  pos = 0; // Boshqa animatsiyalar uchun pozitsiya
+  hue = 0; // Rang qayta boshlanadi
   for (int i = 0; i < NUM_LEDS; i++) {
     leds[i] = CRGB::Black;
   }
@@ -331,7 +325,7 @@ void startTransition() {
 
 void setColorEffect(long code) {
   currentMode = FULL_LED;
-  firePos = 0; // Reset fire animation
+  firePos = 0; // Yong‘in effekti qayta boshlanadi
   switch (code) {
     case WHITE: currentEffect = 1; break;
     case RED: currentEffect = 2; break;
@@ -341,33 +335,36 @@ void setColorEffect(long code) {
     case PINK: currentEffect = 6; break;
   }
   lastEffect = currentEffect;
-  Serial.print("Color effect set: ");
+  Serial.print("Rang effekti o‘rnatildi: ");
   Serial.println(currentEffect);
 }
 
 void saveState() {
-  EEPROM.update(0, currentEffect); // Save only currentEffect
+  EEPROM.update(0, currentEffect); // Faqat currentEffect saqlanadi
 }
 
 void updateAnimation() {
   if (millis() - lastAnimationUpdate < ANIMATION_INTERVAL * (100 - effectSpeed) / 100) return;
   lastAnimationUpdate = millis();
   
+  // Interruptlarni yoqish
+  interrupts();
+  
   if (currentEffect == 0 && millis() - autoTimer > 10000) {
     currentEffect = (lastEffect % 23) + 1;
     lastEffect = currentEffect;
-    firePos = 0; // Reset fire animation
-    pos = 0; // Reset position
+    firePos = 0; // Yong‘in effekti qayta boshlanadi
+    pos = 0; // Pozitsiya qayta boshlanadi
     autoTimer = millis();
-    Serial.print("Auto mode switched to effect: ");
+    Serial.print("Avto rejim effekti o‘zgardi: ");
     Serial.println(currentEffect);
-    saveState(); // Save new effect in Auto mode
+    saveState(); // Yangi effektni saqlash
   }
   
   FastLED.clear();
   
   switch (currentEffect) {
-    case 0: // Auto (handled above)
+    case 0: // Avto (yuqorida boshqariladi)
       break;
     case 1: setLeds(CRGB::White); break;
     case 2: setLeds(CRGB::Red); break;
@@ -383,7 +380,7 @@ void updateAnimation() {
     case 12: runningLights(); break;
     case 13: fadeInOut(); break;
     case 14: twinkle(); break;
-    case 15: fireEffect(); break; // Same as mode 8
+    case 15: fireEffect(); break; // 8 bilan bir xil
     case 16: pulse(); break;
     case 17: strobe(); break;
     case 18: colorCycle(); break;
@@ -409,22 +406,22 @@ void setLeds(CRGB color) {
 }
 
 void setLeds(CHSV color) {
-  setLeds(CRGB(color)); // Convert CHSV to CRGB
+  setLeds(CRGB(color)); // CHSV dan CRGB ga o‘tkazish
 }
 
 void fireEffect() {
   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
   
-  // Clear LEDs
+  // LEDlarni tozalash
   setLeds(CRGB::Black);
   
-  // Single red-hot pixel moving from start to end
+  // Bitta qizil nuqta harakatlanadi
   if (firePos <= end - start) {
-    leds[start + firePos] = CRGB(255, 50, 0); // Red-hot color
+    leds[start + firePos] = CRGB(255, 50, 0); // Qizil rang
   }
   
-  firePos = (firePos + 1) % (end - start + 1); // Loop back to start for continuous animation
+  firePos = (firePos + 1) % (end - start + 1); // Doimiy aylanish
 }
 
 void oceanEffect() {
