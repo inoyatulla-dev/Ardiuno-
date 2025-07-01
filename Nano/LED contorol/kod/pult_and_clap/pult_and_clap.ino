@@ -3,7 +3,7 @@
 #include <EEPROM.h>
 
 // LED Configuration
-#define NUM_LEDS 40
+#define NUM_LEDS 52
 #define DATA_PIN 6
 CRGB leds[NUM_LEDS];
 
@@ -38,7 +38,7 @@ CRGB leds[NUM_LEDS];
 #define AUSTRALIA_START 31
 #define AUSTRALIA_END 35
 #define ANTARCTICA_START 36
-#define ANTARCTICA_END 39 // Adjusted to NUM_LEDS - 1
+#define ANTARCTICA_END 52 // Adjusted to NUM_LEDS - 1
 
 // Pins
 #define MIC_PIN 7
@@ -50,7 +50,7 @@ Mode currentMode = FULL_LED;
 int currentContinent = 0; // 0=Asia, 1=Africa, 2=Europe, 3=North America, 4=South America, 5=Australia, 6=Antarctica
 int currentEffect = 0; // 0=Auto, 1-23 for specific effects
 int lastEffect = 1; // Store last non-auto effect
-bool powerState = true; // Start powered on
+bool powerState = false; // Start powered off
 uint8_t effectSpeed = 50; // 0-100 scale
 unsigned long lastAnimationUpdate = 0;
 const int ANIMATION_INTERVAL = 20; // Reduced for faster animations
@@ -99,6 +99,10 @@ void setup() {
     currentEffect = 0; // Default to Auto mode if invalid
   }
   lastEffect = (currentEffect == 0) ? 1 : currentEffect; // Set lastEffect
+  
+  // Ensure LEDs are off on startup
+  FastLED.clear();
+  FastLED.show();
 }
 
 void loop() {
@@ -114,8 +118,10 @@ void loop() {
 
 void handleRF() {
   if (mySwitch.available()) {
+    Serial.print("Received code: ");
     long code = mySwitch.getReceivedValue();
     mySwitch.resetAvailable();
+    
     
     if (code == 0) {
       Serial.println("Signal could not be read.");
@@ -131,11 +137,17 @@ void handleRF() {
         break;
       case MODE_PLUS:
         changeMode(1);
-        startTransition();
+        if (!powerState) { // Turn on if off
+          powerState = true;
+          Serial.println("Power turned on by MODE_PLUS");
+        }
         break;
       case MODE_MINUS:
         changeMode(-1);
-        startTransition();
+        if (!powerState) { // Turn on if off
+          powerState = true;
+          Serial.println("Power turned on by MODE_MINUS");
+        }
         break;
       case SPEED_PLUS:
         effectSpeed = min(100, effectSpeed + 10);
@@ -152,24 +164,38 @@ void handleRF() {
         currentContinent = (currentContinent + 1) % 7;
         Serial.print("Continent mode: ");
         Serial.println(currentContinent);
-        startTransition();
+        if (!powerState) { // Turn on if off
+          powerState = true;
+          Serial.println("Power turned on by CONTINENT_PLUS");
+        }
         break;
       case CONTINENT_MINUS:
         currentMode = CONTINENT;
         currentContinent = (currentContinent - 1 + 7) % 7;
         Serial.print("Continent mode: ");
         Serial.println(currentContinent);
-        startTransition();
+        if (!powerState) { // Turn on if off
+          powerState = true;
+          Serial.println("Power turned on by CONTINENT_MINUS");
+        }
         break;
       case AUTO:
         currentMode = FULL_LED;
         currentEffect = 0;
         Serial.println("Auto mode activated");
-        startTransition();
+        if (!powerState) { // Turn on if off
+          powerState = true;
+          Serial.println("Power turned on by AUTO");
+        }
+        
         break;
       case WHITE: case RED: case GREEN: case BLUE: case YELLOW: case LIGHT_BLUE: case PINK:
         setColorEffect(code);
-        startTransition();
+        if (!powerState) { // Turn on if off
+          powerState = true;
+          Serial.println("Power turned on by color effect");
+        }
+      
         break;
       default:
         Serial.println("Unknown RF code");
@@ -210,7 +236,11 @@ void processClaps() {
     } else {
       changeMode(1);
     }
-    startTransition();
+    if (!powerState) { // Turn on if off
+      powerState = true;
+      Serial.println("Power turned on by 2 claps");
+    }
+    
   } else if (clapCount == 3) {
     if (currentMode == CONTINENT) {
       currentContinent = (currentContinent - 1 + 7) % 7;
@@ -219,7 +249,11 @@ void processClaps() {
     } else {
       changeMode(-1);
     }
-    startTransition();
+    if (!powerState) { // Turn on if off
+      powerState = true;
+      Serial.println("Power turned on by 3 claps");
+    }
+    
   }
   saveState();
 }
@@ -241,19 +275,10 @@ void togglePower() {
       delay(50);
     }
   } else {
-    // Power on: Flash animation
-   // for (int i = 0; i < 5; i++) {
-    //  setLeds(CHSV(random8(), 255, 255));
-    //  FastLED.show();
-   //   delay(50);
-     // setLeds(CRGB::Black);
-     // FastLED.show();
-     // delay(50);
-     uint8_t trailLength = 10;   // Quyruq uzunligi
-    uint8_t starHue = 160;
-     for (int head = 0; head < NUM_LEDS + trailLength; head++) {
+    uint8_t trailLength = 10;   // Quyruq uzunligi
+uint8_t starHue = 160; 
+  for (int head = 0; head < NUM_LEDS + trailLength; head++) {
     // Barcha LEDlarni biroz qoraytirish (iz qoldirish)
-    
     fadeToBlackBy(leds, NUM_LEDS, 50);
 
     // Shooting Star boshi
@@ -271,7 +296,7 @@ void togglePower() {
 
     FastLED.show();
     delay(30);
-    }
+  }
   }
   saveState();
 }
