@@ -3,7 +3,7 @@
 #include <EEPROM.h>
 
 // LED sozlamalari
-#define NUM_LEDS 52 // 52 ta LED
+#define NUM_LEDS 120 // 52 ta LED
 #define DATA_PIN 6 // LEDlar uchun pin
 CRGB leds[NUM_LEDS];
 
@@ -18,28 +18,27 @@ CRGB leds[NUM_LEDS];
 #define WHITE 429070
 #define RED 429072
 #define GREEN 429073
-#define BLUE 429047
+#define BLUE 429074
 #define YELLOW 429075
 #define LIGHT_BLUE 429076
 #define PINK 429077
 #define AUTO 429064
-#define BUTTON_100 429100 // Piliblab yonib-o‘chadigan effekt
 
 // Qit’a LED diapazonlari
 #define ASIA_START 0
-#define ASIA_END 3
-#define AFRICA_START 4
-#define AFRICA_END 10
-#define EUROPE_START 11
-#define EUROPE_END 15
-#define NORTH_AMERICA_START 16
-#define NORTH_AMERICA_END 20
-#define SOUTH_AMERICA_START 21
-#define SOUTH_AMERICA_END 30
-#define AUSTRALIA_START 31
-#define AUSTRALIA_END 35
-#define ANTARCTICA_START 36
-#define ANTARCTICA_END 51
+#define ASIA_END 17
+#define AFRICA_START 18
+#define AFRICA_END 36
+#define EUROPE_START 37
+#define EUROPE_END 60
+#define NORTH_AMERICA_START 61
+#define NORTH_AMERICA_END 70
+#define SOUTH_AMERICA_START 71
+#define SOUTH_AMERICA_END 78
+#define AUSTRALIA_START 79
+#define AUSTRALIA_END 85
+#define ANTARCTICA_START 86
+#define ANTARCTICA_END 120
 
 // Pinlar
 #define MIC_PIN 7 // Mikrofon pin
@@ -52,7 +51,7 @@ int currentContinent = 0;
 int currentEffect = 0;
 int lastEffect = 1;
 bool powerState = false;
-uint8_t effectSpeed = 50;
+uint8_t effectSpeed = 100;
 unsigned long lastAnimationUpdate = 0;
 unsigned long autoTimer = 0;
 bool isTransitioning = false;
@@ -60,7 +59,7 @@ int firePos = 0;
 uint8_t hue = 0;
 uint8_t pos = 0;
 unsigned long lastButtonTime = 0; // Tugma debouncing uchun
-const unsigned long BUTTON_DEBOUNCE = 1000; // 1 soniya debouncing
+const unsigned long BUTTON_DEBOUNCE = 500; // 1 soniya debouncing
 
 // Clap aniqlash
 unsigned long lastClapTime = 0;
@@ -143,20 +142,22 @@ void handleRF() {
         break;
       case MODE_PLUS:
         changeMode(1);
-        if (!powerState) {
+        if (powerState) {
+            changeMode(1);
           powerState = true;
           Serial.println("MODE_PLUS orqali yoqildi");
         }
         break;
       case MODE_MINUS:
-        changeMode(-1);
-        if (!powerState) {
+        
+        if (powerState) {
+            changeMode(-1);
           powerState = true;
           Serial.println("MODE_MINUS orqali yoqildi");
         }
         break;
       case SPEED_PLUS:
-        effectSpeed = min(100, effectSpeed + 10);
+        effectSpeed = min(100, effectSpeed+ 10);
         Serial.print("Tezlik oshirildi: ");
         Serial.println(effectSpeed);
         break;
@@ -189,13 +190,6 @@ void handleRF() {
       case WHITE: case RED: case GREEN: case BLUE: case YELLOW: case LIGHT_BLUE: case PINK:
         if (powerState) {
           setColorEffect(code);
-        }
-        break;
-      case BUTTON_100:
-        if (powerState) {
-          currentEffect = 8; // Piliblab yonib-o‘chadigan effekt
-          lastEffect = currentEffect;
-          Serial.println("BUTTON_100: Piliblab effekt yoqildi");
         }
         break;
       default:
@@ -264,6 +258,13 @@ void togglePower() {
   powerState = !powerState;
   if (!powerState) {
     currentMode = FULL_LED;
+    for (int i = 255; i >= 0; i -= 10) {
+    for (int j = 0; j < NUM_LEDS; j++) {
+      leds[j].fadeToBlackBy(10); // har bir bosqichda so‘nadi
+    }
+    FastLED.show();
+    delay(30); // qisqa kutish (xohlasangiz millis() bilan ham qilamiz)
+  }
     firePos = 0;
     pos = 0;
     hue = 0;
@@ -272,14 +273,20 @@ void togglePower() {
     FastLED.show();
   } else {
     Serial.println("Quvvat yoqildi");
-     youtubeAnimation();
+     for(int dot = 0; dot < NUM_LEDS; dot++) { 
+            leds[dot] = CRGB::Blue;
+            FastLED.show();
+            // clear this led for the next time around the loop
+            leds[dot] = CRGB::Black;
+            delay(30);
     
+  }
   }
   saveState();
 }
 
 void changeMode(int direction) {
-  currentMode = FULL_LED;
+ // currentMode = FULL_LED;
   firePos = 0;
   pos = 0;
   hue = 0;
@@ -313,12 +320,12 @@ void setColorEffect(long code) {
   hue = 0;
   switch (code) {
     case WHITE: currentEffect = 1; break;
-    case RED: currentEffect = 2; break;
-    case GREEN: currentEffect = 3; break;
+    case RED: currentEffect = 3; break;
+    case GREEN: currentEffect = 2; break;
     case BLUE: currentEffect = 4; break;
     case YELLOW: currentEffect = 5; break;
-    case LIGHT_BLUE: currentEffect = 6; break;
-    case PINK: currentEffect = 7; break;
+    case LIGHT_BLUE: currentEffect = 7; break;
+    case PINK: currentEffect = 6; break;
   }
   lastEffect = currentEffect;
   Serial.print("Rang effekti o‘rnatildi: ");
@@ -352,29 +359,29 @@ void updateAnimation() {
   
   switch (currentEffect) {
     case 0: break;
-    case 1: setLeds(CRGB::White); break;
-    case 2: setLeds(CRGB::Red); break;
-    case 3: setLeds(CRGB::Green); break;
-    case 4: setLeds(CRGB::Blue); break;
-    case 5: setLeds(CRGB::Yellow); break;
-    case 6: setLeds(CRGB(135, 206, 250)); break;
-    case 7: setLeds(CRGB::Pink); break;
-    case 8: softBlink(); break;
-    case 9: oceanWave(); break;
-    case 10: smoothRainbow(); break;
-    case 11: gentlePulse(); break;
-    case 12: twinklingStars(); break;
-    case 13: colorFade(); break;
-    case 14: calmBreathe(); break;
-    case 15: meteorShower(); break;
-    case 16: soothingWipe(); break;
-    case 17: softSparkle(); break;
-    case 18: gradientFlow(); break;
-    case 19: slowCylon(); break;
-    case 20: confettiGlow(); break;
-    case 21: gradientTransition(); break;
-    case 22: rainbowCycle(); break;
-    case 23: staticColors(); break;
+    case 1: setLeds(CHSV(0, 0, 255)); break;
+    case 2: setLeds(CHSV(0, 255, 255)); break;
+    case 3: setLeds(CHSV(96, 255, 255)); break;
+    case 4: setLeds(CHSV(160, 255, 255)); break;
+    case 5: setLeds(CHSV(16, 255, 255)); break;
+    case 6: setLeds(CHSV(128, 200, 255)); break;
+    case 7: setLeds(CHSV(192, 255, 255)); break;
+    case 8: mode_8(); break;
+    case 9: mode_9(); break;
+    case 10: mode_10(); break;
+    case 11: mode_11(); break;
+    case 12: mode_12(); break;
+    case 13: mode_13(); break;
+    case 14: mode_14(); break;
+    case 15: mode_15(); break;
+    case 16: mode_16(); break;
+    case 17: mode_17(); break;
+    case 18: mode_18(); break;
+    case 19: mode_19(); break;
+    case 20: mode_20(); break;
+    case 21: mode_21(); break;
+    case 22: mode_22(); break;
+    case 23: mode_23(); break;
   }
   FastLED.show();
 }
@@ -395,143 +402,360 @@ void setLeds(CHSV color) {
   setLeds(CRGB(color));
 }
 
-void softBlink() {
-  uint8_t brightness = beatsin8(5, 64, 255);
-  setLeds(CHSV(hue, 200, brightness));
-  hue += 2;
-}
+// void mode_8() {
+//   static unsigned long previousMillis = 0;
+//   static int twinkleIndex = 0;
+//   if (millis() - previousMillis > 80) {
+//     previousMillis = millis();
+//     leds[random(NUM_LEDS)] = CHSV(random8(), 255, 255);
+//     fadeToBlackBy(leds, NUM_LEDS, 40);
+//   }
+// }
+void mode_8() {
+  static unsigned long previousMillis = 0;
+  const int DelayDuration = 50;
+  const int Color = 0;
+  const int ColorSaturation = 255;
+  const int PixelVolume = 30;
+  const int FadeAmount = 30;
 
-void oceanWave() {
-  uint8_t brightness = beatsin8(3, 64, 255);
-  setLeds(CHSV(160 + (beatsin8(2, 0, 20)), 200, brightness));
-}
+  if (millis() - previousMillis > DelayDuration) {
+    previousMillis = millis();
 
-void smoothRainbow() {
-  setLeds(CHSV(hue++, 200, 255));
-}
+    for (int i = 0; i < NUM_LEDS; i++) {
+      if (random(PixelVolume) < 2) {
+        uint8_t intensity = random(100, 255);
+        CHSV colorHSV = CHSV(Color, ColorSaturation, intensity);
+        leds[i] = CRGB(colorHSV);
+      }
 
-void gentlePulse() {
-  uint8_t brightness = beatsin8(4, 100, 255);
-  setLeds(CHSV(180 + (beatsin8(3, 0, 20)), 200, brightness));
-}
-
-void twinklingStars() {
-  setLeds(CRGB::Black);
-  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
-  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
-  leds[random(start, end + 1)] = CRGB(CHSV(160 + random8(20), 200, 255));
-}
-
-void colorFade() {
-  uint8_t h = beatsin8(2, 0, 255);
-  setLeds(CHSV(h, 200, 255));
-}
-
-void calmBreathe() {
-  uint8_t brightness = beatsin8(2, 64, 255);
-  setLeds(CHSV(180 + (beatsin8(1, 0, 20)), 200, brightness));
-}
-
-void meteorShower() {
-  static int pos = 0;
-  setLeds(CRGB::Black);
-  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
-  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
-  for (int i = 0; i < 8; i++) {
-    if (pos - i >= start && pos - i <= end) {
-      leds[pos - i] = CRGB(CHSV(160 + random8(20), 200, 255 - (i * 30)));
+      if (leds[i].r > 0 || leds[i].g > 0 || leds[i].b > 0) {
+        leds[i].fadeToBlackBy(FadeAmount);
+      }
     }
   }
-  pos = (pos + 1) % (end - start + 1);
+}
+void mode_9() {
+  static byte heat[NUM_LEDS];
+  static unsigned long previousMillis = 0;
+  const int DelayDuration = 40;
+  const int Cooling = 55;
+  const int Sparks = 120;
+  const int Color = 1; // 0-7 rang tanlash
+  const bool ReverseDirection = false;
+
+  if (millis() - previousMillis > DelayDuration) {
+    previousMillis = millis();
+
+    int cooldown;
+    for (int i = 0; i < NUM_LEDS; i++) {
+      cooldown = random(0, ((Cooling * 10) / NUM_LEDS) + 2);
+      heat[i] = (cooldown > heat[i]) ? 0 : heat[i] - cooldown;
+    }
+
+    for (int k = NUM_LEDS - 1; k >= 2; k--) {
+      heat[k] = (heat[k - 1] + heat[k - 2] + heat[k - 2]) / 3;
+    }
+
+    if (random(255) < Sparks) {
+      int y = random(7);
+      heat[y] = heat[y] + random(160, 255);
+    }
+
+    for (int n = 0; n < NUM_LEDS; n++) {
+      byte temperature = heat[n];
+      byte t192 = (temperature * 191) / 255;
+      byte heatramp = (t192 & 0x3F) << 2;
+
+      int Pixel = ReverseDirection ? (NUM_LEDS - 1 - n) : n;
+
+      CRGB c;
+      if (t192 > 0x80) {
+        c.setRGB(heatramp, heatramp, heatramp);
+      } else if (t192 > 0x40) {
+        c.setRGB(255, heatramp, 0);
+      } else {
+        c.setRGB(heatramp, 0, 0);
+      }
+
+      leds[Pixel] = c;
+    }
+  }
 }
 
-void soothingWipe() {
+
+// void mode_9() {
+//   static unsigned long previousMillis = 0;
+//   if (millis() - previousMillis > 50) {
+//     previousMillis = millis();
+//     for (int i = 0; i < NUM_LEDS; i++) {
+//       byte flicker = random8(192, 255);
+//       leds[i] = CRGB(flicker, flicker / 3, 0);
+//     }
+//   }
+// }
+void mode_10() {
+  static uint8_t hue = 0;
+  fill_solid(leds, NUM_LEDS, CHSV(hue++, 255, 255));
+}
+void mode_11() {
   static int pos = 0;
-  setLeds(CRGB::Black);
-  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
-  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
-  leds[(start + pos) % (end + 1)] = CRGB(CHSV(180 + (beatsin8(2, 0, 20)), 200, 255));
-  pos = (pos + 1) % (end - start + 1);
-}
-
-void softSparkle() {
-  setLeds(CRGB::Black);
-  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
-  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
-  leds[random(start, end + 1)] = CRGB(CHSV(160 + random8(20), 200, 255));
-}
-
-void gradientFlow() {
-  setLeds(CHSV(180 + (beatsin8(2, 0, 40)), 200, 255));
-}
-
-void slowCylon() {
-  static int pos = 0;
-  static bool forward = true;
-  setLeds(CRGB::Black);
-  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
-  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
-  leds[start + pos] = CRGB(CHSV(180 + (beatsin8(2, 0, 20)), 200, 255));
-  if (forward) {
+  static unsigned long previousMillis = 0;
+  if (millis() - previousMillis > 30) {
+    previousMillis = millis();
+    fadeToBlackBy(leds, NUM_LEDS, 64);
+    leds[pos] = CRGB::White;
     pos++;
-    if (pos >= end - start) forward = false;
-  } else {
-    pos--;
-    if (pos <= 0) forward = true;
+    if (pos >= NUM_LEDS) pos = 0;
   }
 }
-
-void confettiGlow() {
-  setLeds(CRGB::Black);
-  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
-  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
-  leds[random(start, end + 1)] = CRGB(CHSV(160 + random8(40), 200, 255));
+void mode_12() {
+  static uint8_t brightness = 0;
+  static int8_t direction = 5;
+  fill_solid(leds, NUM_LEDS, CHSV(0, 255, brightness));
+  brightness += direction;
+  if (brightness == 0 || brightness == 255) direction = -direction;
 }
 
-void gradientTransition() {
-  static uint8_t startHue = 0;
-  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
-  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
-  for (int i = start; i <= end; i++) {
-    leds[i] = CHSV(startHue + (i * 5), 200, 255);
-  }
-  startHue += 2;
-}
+void mode_13() {
+  static byte heat[NUM_LEDS];
+  static unsigned long previousMillis = 0;
+  if (millis() - previousMillis > 40) {
+    previousMillis = millis();
+    for (int i = 0; i < NUM_LEDS; i++) {
+      heat[i] = qsub8(heat[i], random8(0, ((55 * 10) / NUM_LEDS) + 2));
+    }
 
-void rainbowCycle() {
-  static uint8_t startHue = 0;
-  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
-  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
-  for (int i = start; i <= end; i++) {
-    leds[i] = CHSV(startHue + (i * 255 / (end - start + 1)), 200, 255);
-  }
-  startHue += 2;
-}
+    for (int k = NUM_LEDS - 1; k >= 2; k--) {
+      heat[k] = (heat[k - 1] + heat[k - 2] + heat[k - 2]) / 3;
+    }
 
-void staticColors() {
-  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
-  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
-  for (int i = start; i <= end; i++) {
-    switch ((i - start) % 7) {
-      case 0: leds[i] = CRGB::White; break;
-      case 1: leds[i] = CRGB::Red; break;
-      case 2: leds[i] = CRGB::Green; break;
-      case 3: leds[i] = CRGB::Blue; break;
-      case 4: leds[i] = CRGB::Yellow; break;
-      case 5: leds[i] = CRGB(135, 206, 250); break;
-      case 6: leds[i] = CRGB::Pink; break;
+    if (random8() < 120) {
+      int y = random8(7);
+      heat[y] = qadd8(heat[y], random8(160, 255));
+    }
+
+    for (int j = 0; j < NUM_LEDS; j++) {
+      leds[j] = HeatColor(heat[j]);
     }
   }
 }
-
-void youtubeAnimation() {
-  static uint8_t startHue = 0;
-  int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
-  int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
-  
-  for (int i = start; i <= end; i++) {
-    uint8_t brightness = beatsin8(5, 64, 255);
-    leds[i] = CHSV(startHue + (i * 10), 200, brightness);
+void mode_14() {
+  static uint8_t hue = 0;
+  static unsigned long previousMillis = 0;
+  EVERY_N_MILLISECONDS(20) { hue++; }
+  if (millis() - previousMillis > 50) {
+    previousMillis = millis();
+    for (int i = 0; i < NUM_LEDS; i++) {
+      if (random8() < 30)
+        leds[i] = CHSV(hue, 255, 255);
+      else
+        leds[i].fadeToBlackBy(20);
+    }
   }
-  startHue += 3;
 }
+void mode_15() {
+  static uint8_t startIndex = 0;
+  startIndex++;
+  fill_rainbow(leds, NUM_LEDS, startIndex, 7);
+}
+void mode_16() {
+  static int pos = 0;
+  static int dir = 1;
+  static unsigned long previousMillis = 0;
+  if (millis() - previousMillis > 20) {
+    previousMillis = millis();
+    fadeToBlackBy(leds, NUM_LEDS, 80);
+    leds[pos] = CRGB::Red;
+    pos += dir;
+    if (pos == NUM_LEDS - 1 || pos == 0) dir = -dir;
+  }
+}
+void mode_17() {
+  fadeToBlackBy(leds, NUM_LEDS, 20);
+  int pos = random16(NUM_LEDS);
+  leds[pos] += CHSV(random8(), 200, 255);
+}
+void mode_18() {
+  static uint8_t baseHue = 100;
+  fill_solid(leds, NUM_LEDS, CHSV(baseHue, 255, 150));
+  if (random8() < 80) {
+    leds[random16(NUM_LEDS)] += CRGB::White;
+  }
+}
+void mode_19() {
+  fadeToBlackBy(leds, NUM_LEDS, 20);
+  int pos = beatsin16(13, 0, NUM_LEDS - 1);
+  leds[pos] += CHSV(200, 255, 192);
+}
+void mode_20() {
+  fadeToBlackBy(leds, NUM_LEDS, 20);
+  byte dothue = 0;
+  for (int i = 0; i < 8; i++) {
+    leds[beatsin16(i + 7, 0, NUM_LEDS - 1)] |= CHSV(dothue, 200, 255);
+    dothue += 32;
+  }
+}
+void mode_21() {
+  static int pos = 0;
+  static int dir = 1;
+  fadeToBlackBy(leds, NUM_LEDS, 30);
+  leds[pos] = CHSV(160, 255, 255);
+  pos += dir;
+  if (pos >= NUM_LEDS - 1 || pos <= 0) dir = -dir;
+}
+void mode_22() {
+  static int pos = 0;
+  static int dir = 1;
+  fadeToBlackBy(leds, NUM_LEDS, 40);
+  leds[pos] = CRGB::Blue;
+  pos += dir;
+  if (pos <= 0 || pos >= NUM_LEDS - 1) dir = -dir;
+}
+void mode_23() {
+  fadeToBlackBy(leds, NUM_LEDS, 40);
+  if (random8() < 50) {
+    leds[random16(NUM_LEDS)] += CHSV(random8(), 200, 255);
+  }
+}
+
+// void softBlink() {
+//   uint8_t brightness = beatsin8(5, 64, 255);
+//   setLeds(CHSV(hue, 200, brightness));
+//   hue += 2;
+// }
+
+// void oceanWave() {
+//   uint8_t brightness = beatsin8(3, 64, 255);
+//   setLeds(CHSV(160 + (beatsin8(2, 0, 20)), 200, brightness));
+// }
+
+// void smoothRainbow() {
+//   setLeds(CHSV(hue++, 200, 255));
+// }
+
+// void gentlePulse() {
+//   uint8_t brightness = beatsin8(4, 100, 255);
+//   setLeds(CHSV(180 + (beatsin8(3, 0, 20)), 200, brightness));
+// }
+
+// void twinklingStars() {
+//   setLeds(CRGB::Black);
+//   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+//   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+//   leds[random(start, end + 1)] = CRGB(CHSV(160 + random8(20), 200, 255));
+// }
+
+// void colorFade() {
+//   uint8_t h = beatsin8(2, 0, 255);
+//   setLeds(CHSV(h, 200, 255));
+// }
+
+// void calmBreathe() {
+//   uint8_t brightness = beatsin8(2, 64, 255);
+//   setLeds(CHSV(180 + (beatsin8(1, 0, 20)), 200, brightness));
+// }
+
+// void meteorShower() {
+//   static int pos = 0;
+//   setLeds(CRGB::Black);
+//   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+//   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+//   for (int i = 0; i < 8; i++) {
+//     if (pos - i >= start && pos - i <= end) {
+//       leds[pos - i] = CRGB(CHSV(160 + random8(20), 200, 255 - (i * 30)));
+//     }
+//   }
+//   pos = (pos + 1) % (end - start + 1);
+// }
+
+// void soothingWipe() {
+//   static int pos = 0;
+//   setLeds(CRGB::Black);
+//   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+//   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+//   leds[(start + pos) % (end + 1)] = CRGB(CHSV(180 + (beatsin8(2, 0, 20)), 200, 255));
+//   pos = (pos + 1) % (end - start + 1);
+// }
+
+// void softSparkle() {
+//   setLeds(CRGB::Black);
+//   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+//   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+//   leds[random(start, end + 1)] = CRGB(CHSV(160 + random8(20), 200, 255));
+// }
+
+// void gradientFlow() {
+//   setLeds(CHSV(180 + (beatsin8(2, 0, 40)), 200, 255));
+// }
+
+// void slowCylon() {
+//   static int pos = 0;
+//   static bool forward = true;
+//   setLeds(CRGB::Black);
+//   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+//   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+//   leds[start + pos] = CRGB(CHSV(180 + (beatsin8(2, 0, 20)), 200, 255));
+//   if (forward) {
+//     pos++;
+//     if (pos >= end - start) forward = false;
+//   } else {
+//     pos--;
+//     if (pos <= 0) forward = true;
+//   }
+// }
+
+// void confettiGlow() {
+//   setLeds(CRGB::Black);
+//   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+//   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+//   leds[random(start, end + 1)] = CRGB(CHSV(160 + random8(40), 200, 255));
+// }
+
+// void gradientTransition() {
+//   static uint8_t startHue = 0;
+//   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+//   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+//   for (int i = start; i <= end; i++) {
+//     leds[i] = CHSV(startHue + (i * 5), 200, 255);
+//   }
+//   startHue += 2;
+// }
+
+// void rainbowCycle() {
+//   static uint8_t startHue = 0;
+//   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+//   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+//   for (int i = start; i <= end; i++) {
+//     leds[i] = CHSV(startHue + (i * 255 / (end - start + 1)), 200, 255);
+//   }
+//   startHue += 2;
+// }
+
+// void staticColors() {
+//   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+//   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+//   for (int i = start; i <= end; i++) {
+//     switch ((i - start) % 7) {
+//       case 0: leds[i] = CRGB::White; break;
+//       case 1: leds[i] = CRGB::Red; break;
+//       case 2: leds[i] = CRGB::Green; break;
+//       case 3: leds[i] = CRGB::Blue; break;
+//       case 4: leds[i] = CRGB::Yellow; break;
+//       case 5: leds[i] = CRGB(135, 206, 250); break;
+//       case 6: leds[i] = CRGB::Pink; break;
+//     }
+//   }
+// }
+
+// void youtubeAnimation() {
+//   static uint8_t startHue = 0;
+//   int start = currentMode == CONTINENT ? continents[currentContinent].start : 0;
+//   int end = currentMode == CONTINENT ? continents[currentContinent].end : NUM_LEDS - 1;
+  
+//   for (int i = start; i <= end; i++) {
+//     uint8_t brightness = beatsin8(5, 64, 255);
+//     leds[i] = CHSV(startHue + (i * 10), 200, brightness);
+//   }
+//   startHue += 3;
+// }
